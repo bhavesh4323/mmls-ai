@@ -167,7 +167,7 @@ def _resolve_api_url():
             return _sec["MMLS_AI_API_URL"]
     except Exception:
         pass
-    return os.environ.get("MMLS_AI_API_URL", "https://mmls-ai-api-z1ws.onrender.com")
+    return os.environ.get("MMLS_AI_API_URL", "https://mmls-ai-api.onrender.com")
 
 API = _resolve_api_url()
 HOS_COLOR = {"GREEN":"#238636","TEAL":"#1f9e9e","AMBER":"#e3b341","RED":"#f85149","PURPLE":"#8b5cf6"}
@@ -220,19 +220,41 @@ def load_excel_catalog():
     except Exception as e:
         st.error(f"Error loading Excel catalog: {e}")
         return {}
+def _api_request(method, path, **kw):
+    # Render's free API instance sleeps after ~15 min idle and can take up to
+    # ~60-90s to wake. Retry with a generous timeout so the dashboard waits for
+    # the cold start instead of instantly showing "Cannot connect".
+    url = f"{API}{path}"
+    kw.setdefault("timeout", 30)
+    last_err = None
+    for attempt in range(5):
+        try:
+            r = requests.request(method, url, **kw)
+            if r.status_code in (502, 503, 504) and attempt < 4:
+                st.info("Waking the inventory service... please wait a few seconds.")
+                time.sleep(8)
+                continue
+            return r
+        except Exception as e:
+            last_err = e
+            if attempt < 4:
+                st.info("Connecting to the inventory service... (first load can take ~40s)")
+                time.sleep(8)
+    if last_err:
+        raise last_err
+    return r
+
 def api_get(path):
     try:
-        r = requests.get(f"{API}{path}", timeout=5)
-        return r.json()
-    except:
-        st.error("Cannot connect to Flask API. Make sure app.py is running.")
+        return _api_request("get", path).json()
+    except Exception:
+        st.error("Cannot connect to Flask API. It may be waking up - refresh in ~30 seconds.")
         return []
 
 def api_post(path, body):
     try:
-        r = requests.post(f"{API}{path}", json=body, timeout=5)
-        return r.json()
-    except:
+        return _api_request("post", path, json=body).json()
+    except Exception:
         st.error("Cannot connect to Flask API.")
         return {}
 
