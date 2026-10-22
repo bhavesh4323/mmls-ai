@@ -1,0 +1,37 @@
+# Render Blueprint - deploys BOTH MMLS-AI services from one click:
+#   1. mmls-ai-api       Flask API (inventory, scans, forecasts, /twin digital-twin)
+#   2. mmls-ai-dashboard Streamlit dashboard, auto-wired to the API URL below
+# Set MONGO_URI (MongoDB Atlas) on the mmls-ai-api service in the Render dashboard.
+services:
+  - type: web
+    name: mmls-ai-api
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --timeout 180 --workers 2
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: MONGO_URI
+        sync: false          # enter the real Atlas string in the Render dashboard
+
+  - type: web
+    name: mmls-ai-dashboard
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run dashboard.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      # Auto-injects the API service's public URL into the dashboard, so the
+      # dashboard talks to the right backend with zero manual configuration.
+      - key: MMLS_AI_API_URL
+        fromService:
+          type: web
+          name: mmls-ai-api
+          property: url

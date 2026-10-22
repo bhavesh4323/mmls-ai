@@ -1,0 +1,23 @@
+# MMLS-AI — combined requirements for the Hugging Face deployment
+# (dashboard + Flask API + LSCO digital twin)
+
+# ── Dashboard (Streamlit) ──
+streamlit==1.58.0
+plotly==5.24.1
+openpyxl
+
+# ── API (Flask) ──
+flask==3.1.0
+flask-cors==5.0.1
+pymongo==4.10.1
+gunicorn==23.0.0
+python-dotenv==1.0.1
+
+# ── Shared: AI models + digital twin ──
+xgboost==2.1.4
+scikit-learn==1.6.1
+numpy==1.26.4
+pandas==2.2.3
+joblib==1.4.2
+requests==2.32.3
+Pillow==11.1.0
