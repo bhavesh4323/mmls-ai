@@ -222,24 +222,29 @@ def load_excel_catalog():
         return {}
 def _api_request(method, path, **kw):
     # Render's free API instance sleeps after ~15 min idle and can take up to
-    # ~60-90s to wake. Retry with a generous timeout so the dashboard waits for
-    # the cold start instead of instantly showing "Cannot connect".
+    # ~60-90s to fully wake. Poll patiently (Render returns a fast 502 while it
+    # spins the container up) so the dashboard rides out the cold start instead
+    # of instantly showing "Cannot connect". Bounded to ~2 min worst case.
     url = f"{API}{path}"
     kw.setdefault("timeout", 30)
     last_err = None
-    for attempt in range(5):
+    r = None
+    for attempt in range(12):
         try:
             r = requests.request(method, url, **kw)
-            if r.status_code in (502, 503, 504) and attempt < 4:
-                st.info("Waking the inventory service... please wait a few seconds.")
-                time.sleep(8)
+            if r.status_code in (502, 503, 504) and attempt < 11:
+                if attempt in (0, 4, 8):
+                    st.info("Waking the inventory service... this takes ~30-60s on first load, please wait.")
+                time.sleep(5)
                 continue
             return r
         except Exception as e:
             last_err = e
-            if attempt < 4:
-                st.info("Connecting to the inventory service... (first load can take ~40s)")
-                time.sleep(8)
+            if attempt in (0, 4, 8):
+                st.info("Connecting to the inventory service... first load can take ~60s, please wait.")
+            time.sleep(5)
+    if r is not None and r.status_code in (502, 503, 504):
+        return r
     if last_err:
         raise last_err
     return r
