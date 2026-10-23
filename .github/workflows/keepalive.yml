@@ -1,0 +1,12 @@
+﻿name: Keep Render API awake
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the sleeping free-tier API
+        run: |
+          echo "API:"; curl -s -o /dev/null -w "%{http_code}\n" --max-time 100 https://mmls-ai-api.onrender.com/
