@@ -221,29 +221,30 @@ def load_excel_catalog():
         st.error(f"Error loading Excel catalog: {e}")
         return {}
 def _api_request(method, path, **kw):
-    # Render's free API instance sleeps after ~15 min idle and can take up to
-    # ~60-90s to fully wake. Poll patiently (Render returns a fast 502 while it
-    # spins the container up) so the dashboard rides out the cold start instead
-    # of instantly showing "Cannot connect". Bounded to ~2 min worst case.
+    # Render's free API instance sleeps after ~15 min idle and needs ~60-90s to
+    # wake. Instead of blocking and then showing a hard error (which forced the
+    # user to refresh manually), we poll once and, if the API is still asleep,
+    # auto-rerun the page every few seconds until it answers. Bounded to ~90s.
     url = f"{API}{path}"
-    kw.setdefault("timeout", 30)
-    last_err = None
+    kw.setdefault("timeout", 20)
     r = None
-    for attempt in range(12):
-        try:
-            r = requests.request(method, url, **kw)
-            if r.status_code in (502, 503, 504) and attempt < 11:
-                if attempt in (0, 4, 8):
-                    st.info("Waking the inventory service... this takes ~30-60s on first load, please wait.")
-                time.sleep(5)
-                continue
-            return r
-        except Exception as e:
-            last_err = e
-            if attempt in (0, 4, 8):
-                st.info("Connecting to the inventory service... first load can take ~60s, please wait.")
-            time.sleep(5)
-    if r is not None and r.status_code in (502, 503, 504):
+    last_err = None
+    try:
+        r = requests.request(method, url, **kw)
+    except Exception as e:
+        last_err = e
+    if r is not None and r.status_code not in (502, 503, 504):
+        st.session_state.pop("_api_wake_n", None)  # API is warm -> reset counter
+        return r
+    n = st.session_state.get("_api_wake_n", 0)
+    if n < 18:
+        st.session_state["_api_wake_n"] = n + 1
+        st.info("🔄 The inventory service is asleep and waking up. This page refreshes "
+                "automatically — please wait ~60s. (First load is slow on free hosting.)")
+        time.sleep(5)
+        st.rerun()
+    st.session_state.pop("_api_wake_n", None)
+    if r is not None:
         return r
     if last_err:
         raise last_err
@@ -253,7 +254,7 @@ def api_get(path):
     try:
         return _api_request("get", path).json()
     except Exception:
-        st.error("Cannot connect to Flask API. It may be waking up - refresh in ~30 seconds.")
+        st.error("Cannot reach the inventory service after ~90s. It may still be starting - please refresh once more.")
         return []
 
 def api_post(path, body):
