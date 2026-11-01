@@ -42,6 +42,12 @@ def render_twin_dashboard(api_url):
     wbb = wbb_col.slider("Walking blood bank (units/day per R2E)", 0, 120, 0, 10)
     depot_loss = depot_col.checkbox("Theatre depot struck (hour 168)", value=False)
 
+    grp_col, attr_col = st.columns(2)
+    use_grouping = grp_col.checkbox("Enable ABO/Rh blood group constraints", value=False,
+                                    help="Limits WBB output by blood group compatibility (Nye model)")
+    use_attrition = attr_col.checkbox("Enable donor pool attrition", value=False,
+                                      help="Models donor loss from casualties, rotation, illness over time")
+
     if st.button("Run static vs dynamic simulation", key="run_twin_simulation"):
         params = {
             "theatre_casualties_per_day": int(casualties),
@@ -51,6 +57,8 @@ def render_twin_dashboard(api_url):
             "wh_init_days": wh_days,
             "order_fail_p": order_loss / 100,
             "wbb_units_per_day": wbb,
+            "use_blood_grouping": "true" if use_grouping else "false",
+            "use_donor_attrition": "true" if use_attrition else "false",
         }
         if surge_hours == "At hour 72":
             params.update(surge_start_h=72, surge_mult=2.5)
@@ -222,3 +230,113 @@ def render_twin_dashboard(api_url):
         "PURPLE <2h commander alert and lateral redistribution. Lowest item: "
         f"{frame.sort_values('hours_of_supply').iloc[0]['item_name']} at {tier}."
     )
+
+    # ── Monte Carlo Validation (Nye model benchmark) ──────────────────────────────
+    st.divider()
+    st.subheader("Monte Carlo Validation (Nye blood model benchmark)")
+    st.caption(
+        "Runs the simulation N times with different random seeds to produce a "
+        "statistical distribution of outcomes. Validates whether the day-2 blood "
+        "stock-out is a robust finding or seed-dependent. Sources: Nye et al. 2014, "
+        "BST PID \u00a74.2."
+    )
+    mc_col1, mc_col2 = st.columns([1, 2])
+    mc_runs = mc_col1.slider("Number of runs", 10, 200, 50, step=10)
+    mc_policy = mc_col2.selectbox("Policy", ["dynamic", "static"], index=0)
+
+    if st.button("Run Monte Carlo validation", key="run_monte_carlo"):
+        mc_params = {
+            "theatre_casualties_per_day": int(casualties),
+            "days": int(days),
+            "evac_factor": evac,
+            "lift_factor": lift,
+            "order_fail_p": order_loss / 100,
+            "wbb_units_per_day": wbb,
+            "use_blood_grouping": "true" if use_grouping else "false",
+            "use_donor_attrition": "true" if use_attrition else "false",
+            "mc_runs": mc_runs,
+            "policy": mc_policy,
+        }
+        if surge_hours == "At hour 72":
+            mc_params.update(surge_start_h=72, surge_mult=2.5)
+        elif surge_hours == "At hour 240":
+            mc_params.update(surge_start_h=240, surge_mult=2.5)
+        if cold_chain:
+            mc_params["cold_chain_loss_h"] = 120
+        if depot_loss:
+            mc_params["depot_loss_h"] = 168
+        with st.spinner(f"Running {mc_runs} Monte Carlo iterations..."):
+            try:
+                resp = requests.get(
+                    f"{api_url}/twin/monte-carlo", params=mc_params,
+                    headers=api_headers, timeout=300
+                )
+                resp.raise_for_status()
+                mc_result = resp.json()
+            except (requests.RequestException, ValueError) as exc:
+                st.error(f"Monte Carlo run failed: {exc}")
+                return
+
+        st.caption(mc_result["classification"])
+        summary = mc_result["summary"]
+        results_df = pd.DataFrame(mc_result["results"])
+
+        # Key metrics cards
+        col_a, col_b, col_c = st.columns(3)
+        fr = summary.get("fill_rate", {})
+        col_a.metric("Median Fill Rate", f"{fr.get('median', 'N/A')}%",
+                     f"p5: {fr.get('p5', '?')}% \u2013 p95: {fr.get('p95', '?')}%")
+        bso = summary.get("blood_stockout_day", {})
+        col_b.metric("Blood Stock-out Day (median)", f"{bso.get('median', 'None')}",
+                     f"p5: {bso.get('p5', '?')} \u2013 p95: {bso.get('p95', '?')}")
+        fso = summary.get("first_stockout_day", {})
+        col_c.metric("First Stock-out Day (median)", f"{fso.get('median', 'None')}",
+                     f"p5: {fso.get('p5', '?')} \u2013 p95: {fso.get('p95', '?')}")
+
+        # Distribution histogram
+        if not results_df.empty:
+            fig_mc = px.histogram(
+                results_df, x="overall_fill_rate_pct", nbins=20,
+                title=f"Monte Carlo distribution of fill rate ({mc_runs} runs, {mc_policy} policy)",
+                color_discrete_sequence=["#58a6ff"],
+            )
+            fig_mc.add_vline(x=fr.get("median", 0), line_dash="dash", line_color="#f85149",
+                            annotation_text="Median")
+            fig_mc.update_layout(
+                plot_bgcolor="#0d1117", paper_bgcolor="#161b22",
+                font_color="#c9d1d9", height=350,
+                xaxis_title="Fill rate (%)", yaxis_title="Count",
+            )
+            st.plotly_chart(fig_mc, use_container_width=True, config={'displayModeBar': False})
+
+        # Blood stock-out distribution
+        blood_df = results_df.dropna(subset=["blood_stockout_day"])
+        if not blood_df.empty:
+            fig_b = px.histogram(
+                blood_df, x="blood_stockout_day", nbins=15,
+                title="Distribution of first blood stock-out day across runs",
+                color_discrete_sequence=["#f85149"],
+            )
+            fig_b.update_layout(
+                plot_bgcolor="#0d1117", paper_bgcolor="#161b22",
+                font_color="#c9d1d9", height=300,
+                xaxis_title="Day", yaxis_title="Count",
+            )
+            st.plotly_chart(fig_b, use_container_width=True, config={'displayModeBar': False})
+
+        # Validation interpretation
+        st.markdown("**Validation interpretation:**")
+        if bso and bso.get("p5") is not None:
+            if bso["p5"] <= 2 and bso["median"] <= 4:
+                st.success(
+                    f"\u2705 Day-{bso['median']} blood stock-out is a **robust finding**: "
+                    f"95% of runs stock out by day {bso['p95']}. "
+                    f"This validates the PID \u00a74.2 blood constraint."
+                )
+            else:
+                st.warning(
+                    f"\u26a0\u00a0 Blood stock-out timing is variable (p5={bso['p5']}, "
+                    f"p95={bso['p95']}). Day-2 is not a sufficient validation anchor alone \u2014 "
+                    f"consider reproducing the full Nye Monte Carlo model with donor attrition."
+                )
+        st.dataframe(results_df.head(20), use_container_width=True, hide_index=True)
