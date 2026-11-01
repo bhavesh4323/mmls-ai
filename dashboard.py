@@ -1060,7 +1060,7 @@ def show_dashboard():
                         fig.update_yaxes(automargin=True)
                         fig.update_xaxes(rangemode="tozero")
                         
-                        st.plotly_chart(fig, use_container_width=True, theme=None)
+                        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
                     with col_fi:
                         st.markdown("**Feature Importance (XGBoost)**")
                         if os.path.exists("feature_importance.png"):
@@ -1098,7 +1098,7 @@ def show_dashboard():
                         font=dict(color="#c9d1d9"), 
                         bordercolor="#30363d",      
                         borderwidth=1))
-                st.plotly_chart(fig, use_container_width=True,theme=None)
+                st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
                 from sklearn.metrics import r2_score, mean_squared_error
                 r2  = r2_score(actual, preds_arr)
                 mse = mean_squared_error(actual, preds_arr)
@@ -1142,7 +1142,7 @@ def show_dashboard():
             fig.update_layout(title="Hours of Supply per Item",
                 plot_bgcolor="#0d1117",paper_bgcolor="#161b22",
                 font_color="#c9d1d9",height=560,xaxis_title="Hours of Supply")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
     # ── TAB 7: CROSS-ECHELON MAP ──────────────────────────────────────────────
     if tab7:
@@ -1263,7 +1263,7 @@ def show_dashboard():
                             labels={"predicted_rate":"Rate (u/hr)","item_name":""})
                         fig.update_layout(plot_bgcolor="#0d1117",paper_bgcolor="#161b22",
                                           font_color="#c9d1d9",height=480)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                         crit = df_p[df_p["hos_tier"].isin(["RED","PURPLE"])]
                         if len(crit)>0:
                             st.error(f"⚠️ {len(crit)} items in RED/PURPLE — emergency resupply needed!")

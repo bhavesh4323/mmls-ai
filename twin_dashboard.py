@@ -109,6 +109,7 @@ def render_twin_dashboard(api_url):
                     title="Demand fill rate by item (static planning factors vs dynamic predictor)",
                 ),
                 use_container_width=True,
+                config={'displayModeBar': False},
             )
             stockouts = frame.pivot(
                 index="item", columns="policy", values="first_stockout_day"
@@ -126,6 +127,7 @@ def render_twin_dashboard(api_url):
                     title="Dynamic-policy fill rate by echelon",
                 ),
                 use_container_width=True,
+                config={'displayModeBar': False},
             )
 
     # ── Hours-of-Supply snapshot across the theatre (simulator output) ──
