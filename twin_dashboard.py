@@ -272,13 +272,24 @@ def render_twin_dashboard(api_url):
                 )
                 resp.raise_for_status()
                 mc_result = resp.json()
-            except (requests.RequestException, ValueError) as exc:
-                st.error(f"Monte Carlo run failed: {exc}")
+            except requests.RequestException as exc:
+                detail = ""
+                resp_obj = getattr(exc, "response", None)
+                if resp_obj is not None:
+                    try:
+                        detail = resp_obj.json().get("error", "")
+                    except ValueError:
+                        pass
+                st.error(f"Monte Carlo run failed: {detail or exc}")
                 return
 
         st.caption(mc_result["classification"])
+        if mc_result.get("note"):
+            st.info(f"\u2139 {mc_result['note']}: requested {mc_result.get('requested_runs')} runs, "
+                    f"completed {mc_result.get('n_runs')} to stay within free-hosting time limits.")
         summary = mc_result["summary"]
         results_df = pd.DataFrame(mc_result["results"])
+        actual_runs = len(results_df)
 
         # Key metrics cards
         col_a, col_b, col_c = st.columns(3)
@@ -296,7 +307,7 @@ def render_twin_dashboard(api_url):
         if not results_df.empty:
             fig_mc = px.histogram(
                 results_df, x="overall_fill_rate_pct", nbins=20,
-                title=f"Monte Carlo distribution of fill rate ({mc_runs} runs, {mc_policy} policy)",
+                title=f"Monte Carlo distribution of fill rate ({actual_runs} runs, {mc_policy} policy)",
                 color_discrete_sequence=["#58a6ff"],
             )
             fig_mc.add_vline(x=fr.get("median", 0), line_dash="dash", line_color="#f85149",
