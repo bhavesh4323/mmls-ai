@@ -268,8 +268,7 @@ def render_twin_dashboard(api_url):
         with st.spinner(f"Running {mc_runs} Monte Carlo iterations..."):
             try:
                 resp = requests.get(
-                    f"{api_url}/twin/monte-carlo", params=mc_params,
-                    headers=api_headers, timeout=300
+                    f"{api_url}/twin/monte-carlo", params=mc_params, timeout=300
                 )
                 resp.raise_for_status()
                 mc_result = resp.json()
