@@ -153,6 +153,12 @@ tbody tr:hover {
 }
 /* Misc tweaks */
 .stAlert, .stMarkdown, .stMetric { color: #c9d1d9 !important; }
+/* Scrollbar: wider + distinct color for usability */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: #0d1117; border-radius: 7px; }
+::-webkit-scrollbar-thumb { background: #58a6ff; border-radius: 7px; border: 3px solid #0d1117; }
+::-webkit-scrollbar-thumb:hover { background: #79c0ff; }
+* { scrollbar-width: thin; scrollbar-color: #58a6ff #0d1117; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1143,12 +1149,13 @@ def show_dashboard():
         with tab7:
             st.subheader("Cross-Echelon Supply Chain View")
             st.caption("Multi-echelon visibility across Role 1, 2 and 3 facilities")
+            st.caption("Positioning inputs: geographic coordinates reflect a realistic theatre layout — R1 forward (closest to contact), R2 mid-distance (FST), R3 rear area (general hospital). Nodes are ~80-120 km apart to represent typical echelon spacing in LSCO.")
             echelons = [
-                {"node":"R1-ALPHA","role":"Role 1","lat":28.52,"lon":77.12,
+                {"node":"R1-ALPHA","role":"Role 1","lat":28.30,"lon":76.80,
                  "items":8,"avg_hos":round(random.uniform(6,18),1),"tier":"AMBER","personnel":12},
                 {"node":"R2-BRAVO","role":"Role 2","lat":28.55,"lon":77.18,
                  "items":7,"avg_hos":round(random.uniform(14,26),1),"tier":"TEAL","personnel":28},
-                {"node":"R3-CHARLIE","role":"Role 3","lat":28.60,"lon":77.25,
+                {"node":"R3-CHARLIE","role":"Role 3","lat":28.85,"lon":77.60,
                  "items":20,"avg_hos":round(random.uniform(28,48),1),"tier":"GREEN","personnel":85},
             ]
             df_eco = pd.DataFrame(echelons)
@@ -1159,10 +1166,10 @@ def show_dashboard():
                     fig.add_trace(go.Scattergeo(
                         lon=[row["lon"]],lat=[row["lat"]],
                         mode="markers+text",
-                        marker=dict(size=22,color=HOS_COLOR[row["tier"]],
+                        marker=dict(size=14,color=HOS_COLOR[row["tier"]],
                                     line=dict(width=2,color="white")),
-                        text=[row["node"]],textposition="top center",
-                        textfont=dict(color="#ffffff",size=13),
+                        text=[row["node"]],textposition="bottom center",
+                        textfont=dict(color="#ffffff",size=11),
                         name=f"{row['node']} ({row['tier']})",
                         hovertemplate=f"<b>{row['node']}</b><br>Role: {row['role']}<br>Avg HoS: {row['avg_hos']}h<br>Tier: {row['tier']}<extra></extra>"))
                 for i in range(len(echelons)-1):
@@ -1174,7 +1181,7 @@ def show_dashboard():
                     title="Echelon Supply Chain",title_font=dict(color="#ffffff", size=16),font=dict(color="#c9d1d9"),
                     geo=dict(showland=True,landcolor="#161b22",showocean=True,
                              oceancolor="#0d1117",showcountries=True,countrycolor="#30363d",
-                             center=dict(lat=28.55,lon=77.18),projection_scale=50,
+                             center=dict(lat=28.55,lon=77.18),projection_scale=3.5,
                              bgcolor="#0d1117"),
                     paper_bgcolor="#161b22",font_color="#c9d1d9",height=420,margin=dict(l=0, r=0, t=40, b=0),
                     legend=dict(
@@ -1182,7 +1189,7 @@ def show_dashboard():
                         font=dict(color="#c9d1d9", size=12), 
                         bordercolor="#30363d",
                         borderwidth=1))
-                st.plotly_chart(fig, use_container_width=True,theme=None)
+                st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
             with col_tbl:
                 st.markdown("**Node Status**")
                 for _,row in df_eco.iterrows():
