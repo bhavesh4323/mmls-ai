@@ -1,4 +1,30 @@
+# Python
 __pycache__/
+*.py[cod]
 *.pyc
-.streamlit/secrets.toml
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets
 .env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Data & logs
+training_data*
+*.log
+
+# Utility outputs
+model_resaved.json
+model_resaved.pkl
+
+# Hugging Face deploy (separate target)
+hf_deploy/
+
+# HF / duplicate artifacts
+gitattributes
+runtime.txt
+render (1).yaml
+push_to_hf_space.ps1
