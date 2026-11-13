@@ -263,11 +263,15 @@ def _camera_scanner_html(api_url, qty, user):
   }
   // Cache of known item codes so a scan can tell "log use" from "new item".
   var known = {};
+  var invById = {};
   function loadInventory() {
     return fetch(API + '/inventory').then(function (r) { return r.json(); }).then(function (list) {
-      known = {};
-      (list || []).forEach(function (it) { known[String(it.item_id).toLowerCase()] = true; });
-    }).catch(function () { known = {}; });
+      known = {}; invById = {};
+      (list || []).forEach(function (it) {
+        known[String(it.item_id).toLowerCase()] = true;
+        invById[String(it.item_id).toLowerCase()] = it;
+      });
+    }).catch(function () { known = {}; invById = {}; });
   }
   loadInventory();
 
@@ -336,70 +340,86 @@ def _camera_scanner_html(api_url, qty, user):
       });
   }
 
-  // Public product lookup so any barcode/QR in the world returns medicine info.
+  // Instant, always-useful scan info: code type + GS1 country + our own inventory
+  // record render immediately; the public product databases are queried in parallel
+  // and only augment the card, so a regional medicine barcode still returns info fast.
   var lastProductName = '';
-  function showInfo(code) {
+  var GS1_COUNTRY = {
+    '00':'US / Canada','01':'US / Canada','03':'US / Canada','06':'US / Canada','13':'US / Canada',
+    '30':'France','37':'France','40':'Germany','44':'Germany','45':'Japan','49':'Japan',
+    '50':'United Kingdom','69':'China','80':'Italy','84':'Spain','87':'Netherlands',
+    '88':'Singapore / Thailand / Korea','89':'India / Vietnam','90':'Austria',
+    '93':'Australia','94':'New Zealand','60':'South Africa'
+  };
+  function gs1Country(code) {
+    if (!/^\\d{8,14}$/.test(code)) return '';
+    return GS1_COUNTRY[code.slice(0,3)] || GS1_COUNTRY[code.slice(0,2)] || ('GS1 prefix ' + code.slice(0,3));
+  }
+  function showInfo(code, fmt) {
     var box = document.getElementById('mmsai-info');
     box.style.display = 'block';
-    box.textContent = 'Looking up ' + code + ' in public product databases…';
-    function render(src, p) {
+    box.textContent = '';
+    function row(k, v) {
+      if (!v && v !== 0) return;
+      var d = document.createElement('div'); d.style.margin = '2px 0';
+      var b = document.createElement('b'); b.textContent = k + ': ';
+      d.appendChild(b); d.appendChild(document.createTextNode(v));
+      box.appendChild(d);
+    }
+    var t = document.createElement('div');
+    t.style.cssText = 'font-weight:600;margin-bottom:4px';
+    t.textContent = 'ℹ️ ' + code;
+    box.appendChild(t);
+    row('Code type', fmt || 'barcode / QR');
+    var country = gs1Country(code);
+    if (country) row('GS1 country', country);
+    var mine = invById[code.toLowerCase()];
+    if (mine) {
+      row('In inventory', mine.item_name + ' · stock ' + mine.current_stock
+          + ' · alert ' + mine.alert_threshold + ' · ' + (mine.echelon || ''));
+    }
+    var filled = false, noneShown = false;
+    function fill(src, p) {
+      if (filled) return; filled = true;
       lastProductName = p.product_name || p.generic_name || '';
+      row('Name', lastProductName);
+      row('Brand', p.brands);
+      row('Categories', p.categories);
+      row('Pack size', p.quantity);
       if (regEl.style.display === 'block' && curCode === code
           && !document.getElementById('mmsai-reg-name').value && lastProductName) {
         document.getElementById('mmsai-reg-name').value = lastProductName;
         document.getElementById('mmsai-reg-note').textContent =
           'Name auto-filled from ' + src + ' — edit if needed.';
       }
-      box.textContent = '';
-      var t = document.createElement('div');
-      t.style.cssText = 'font-weight:600;margin-bottom:4px';
-      t.textContent = 'ℹ️ Product info — ' + src;
-      box.appendChild(t);
-      function row(k, v) {
-        if (!v) return;
-        var d = document.createElement('div'); d.style.margin = '2px 0';
-        var b = document.createElement('b'); b.textContent = k + ': ';
-        d.appendChild(b); d.appendChild(document.createTextNode(v));
-        box.appendChild(d);
-      }
-      row('Name', p.product_name || p.generic_name);
-      row('Brand', p.brands);
-      row('Categories', p.categories);
-      row('Pack size', p.quantity);
-      row('Labels', p.labels);
-      row('Ingredients', String(p.ingredients_text || '').slice(0, 140));
-      if (!lastProductName && !p.brands) {
-        box.textContent = 'No public record for ' + code + ' — it may be a local/regional code. '
-          + 'Add it manually below, or log use if it is already in inventory.';
-      }
     }
-    function off() {
-      return fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code)
-                   + '.json?fields=product_name,generic_name,brands,categories,quantity,labels,ingredients_text')
+    function none() {
+      if (filled || noneShown) return; noneShown = true;
+      row('Public record', 'none in Open Products/Food Facts (normal for regional medicines) — your inventory details above still apply');
+    }
+    function get(host, src) {
+      return fetch('https://' + host + '/api/v2/product/' + encodeURIComponent(code)
+                   + '.json?fields=product_name,generic_name,brands,categories,quantity')
         .then(function (r) { return r.json(); })
-        .then(function (j) {
-          if (j && j.product) render('Open Food Facts', j.product);
-          else box.textContent = 'No public record for ' + code + ' — add it manually below, or log use if it is already in inventory.';
-        })
-        .catch(function () { box.textContent = 'Product lookup unavailable (offline).'; });
+        .then(function (j) { if (j && j.product && (j.product.product_name || j.product.brands)) fill(src, j.product); })
+        .catch(function () {});
     }
-    fetch('https://world.openproductsfacts.org/api/v2/product/' + encodeURIComponent(code)
-          + '.json?fields=product_name,generic_name,brands,categories,quantity,labels,ingredients_text')
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (j && j.product && (j.product.product_name || j.product.brands)) render('Open Products Facts', j.product);
-        else return off();
-      })
-      .catch(off);
+    Promise.all([
+      get('world.openproductsfacts.org', 'Open Products Facts'),
+      get('world.openfoodfacts.org', 'Open Food Facts')
+    ]).then(none);
+    setTimeout(none, 6000);
   }
 
-  function onScan(text) {
+  function onScan(text, result) {
     if (cooldown) return;
     cooldown = true;
-    setTimeout(function () { cooldown = false; }, 2500);
+    setTimeout(function () { cooldown = false; }, 1200);
     beep();
     var code = String(text).trim();
-    showInfo(code);
+    var fmt = '';
+    try { fmt = result.result.format.formatName; } catch (e) {}
+    showInfo(code, fmt);
     if (known[code.toLowerCase()]) {
       logUse(code);
     } else {
@@ -413,8 +433,22 @@ def _camera_scanner_html(api_url, qty, user):
     if (running) return;
     statusEl.textContent = 'Starting camera…';
     hq.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: function (vw, vh) { var s = Math.min(vw, vh) * 0.75; return { width: s, height: s }; } },
+      { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      {
+        fps: 20,
+        qrbox: function (vw, vh) { return { width: Math.floor(vw * 0.9), height: Math.floor(vh * 0.7) }; },
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.DATA_MATRIX
+        ],
+        verbose: false
+      },
       onScan,
       function () {}
     ).then(function () {
