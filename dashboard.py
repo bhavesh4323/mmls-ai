@@ -433,7 +433,7 @@ def _camera_scanner_html(api_url, qty, user):
     if (running) return;
     statusEl.textContent = 'Starting camera…';
     hq.start(
-      { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      { facingMode: 'environment' },
       {
         fps: 20,
         qrbox: function (vw, vh) { return { width: Math.floor(vw * 0.9), height: Math.floor(vh * 0.7) }; },
@@ -447,6 +447,11 @@ def _camera_scanner_html(api_url, qty, user):
           Html5QrcodeSupportedFormats.UPC_E,
           Html5QrcodeSupportedFormats.DATA_MATRIX
         ],
+        videoConstraints: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
         verbose: false
       },
       onScan,
