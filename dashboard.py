@@ -192,10 +192,12 @@ def _camera_scanner_html(api_url, qty, user):
     """
     return """
 <div id="mmsai-reader" style="width:100%;max-width:440px;margin:0 auto;border-radius:10px;overflow:hidden"></div>
-<div id="mmsai-cam-status" style="text-align:center;color:#8b949e;font-size:13px;margin:8px 0">Starting camera…</div>
+<div id="mmsai-cam-status" style="text-align:center;color:#8b949e;font-size:13px;margin:8px 0">Press ▶️ Start camera when ready.</div>
 <div style="text-align:center;margin:6px 0">
-  <button id="mmsai-cam-stop" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 14px;cursor:pointer">⏹ Stop camera</button>
+  <button id="mmsai-cam-start" style="background:#238636;color:#fff;border:none;border-radius:6px;padding:7px 16px;cursor:pointer;font-weight:600;margin-right:8px">▶️ Start camera</button>
+  <button id="mmsai-cam-stop" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:7px 14px;cursor:pointer">⏹ Stop camera</button>
 </div>
+<div id="mmsai-info" style="display:none;max-width:440px;margin:8px auto;padding:10px 12px;background:#161b22;border:1px solid #30363d;border-radius:10px;font-size:12px;color:#c9d1d9"></div>
 <div id="mmsai-reg" style="display:none;max-width:440px;margin:10px auto;padding:12px 14px;background:#161b22;border:1px solid #30363d;border-radius:10px">
   <div style="color:#c9d1d9;font-weight:600;margin-bottom:4px">➕ New item from this scan</div>
   <div id="mmsai-reg-code" style="font:12px monospace;color:#8b949e;margin-bottom:8px"></div>
@@ -275,25 +277,10 @@ def _camera_scanner_html(api_url, qty, user):
     curCode = code;
     document.getElementById('mmsai-reg-code').textContent = 'Scanned code: ' + code + ' (not in inventory yet)';
     document.getElementById('mmsai-reg-name').value = '';
-    document.getElementById('mmsai-reg-note').textContent = 'Looking up the product name…';
+    document.getElementById('mmsai-reg-note').textContent =
+      'The product lookup above prefills the name if this is a known retail code.';
     regEl.style.display = 'block';
     statusEl.textContent = 'Unknown code — check the details and add it to inventory.';
-    // Best-effort public lookup so a retail barcode can prefill its name.
-    fetch('https://world.openproductsfacts.org/api/v2/product/' + encodeURIComponent(code)
-          + '.json?fields=product_name,brands')
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        var p = j && j.product;
-        var name = p && (p.product_name || p.generic_name) || '';
-        var brand = p && p.brands ? String(p.brands).split(',')[0] : '';
-        if (name) document.getElementById('mmsai-reg-name').value = (brand ? brand + ' ' : '') + name;
-        document.getElementById('mmsai-reg-note').textContent =
-          name ? 'Name auto-filled from Open Products Facts — edit if needed.'
-               : 'Not in the public product database — type the name yourself.';
-      })
-      .catch(function () {
-        document.getElementById('mmsai-reg-note').textContent = 'Type the item name yourself.';
-      });
   }
   document.getElementById('mmsai-reg-cancel').onclick = function () { regEl.style.display = 'none'; };
   document.getElementById('mmsai-reg-add').onclick = function () {
@@ -349,12 +336,70 @@ def _camera_scanner_html(api_url, qty, user):
       });
   }
 
+  // Public product lookup so any barcode/QR in the world returns medicine info.
+  var lastProductName = '';
+  function showInfo(code) {
+    var box = document.getElementById('mmsai-info');
+    box.style.display = 'block';
+    box.textContent = 'Looking up ' + code + ' in public product databases…';
+    function render(src, p) {
+      lastProductName = p.product_name || p.generic_name || '';
+      if (regEl.style.display === 'block' && curCode === code
+          && !document.getElementById('mmsai-reg-name').value && lastProductName) {
+        document.getElementById('mmsai-reg-name').value = lastProductName;
+        document.getElementById('mmsai-reg-note').textContent =
+          'Name auto-filled from ' + src + ' — edit if needed.';
+      }
+      box.textContent = '';
+      var t = document.createElement('div');
+      t.style.cssText = 'font-weight:600;margin-bottom:4px';
+      t.textContent = 'ℹ️ Product info — ' + src;
+      box.appendChild(t);
+      function row(k, v) {
+        if (!v) return;
+        var d = document.createElement('div'); d.style.margin = '2px 0';
+        var b = document.createElement('b'); b.textContent = k + ': ';
+        d.appendChild(b); d.appendChild(document.createTextNode(v));
+        box.appendChild(d);
+      }
+      row('Name', p.product_name || p.generic_name);
+      row('Brand', p.brands);
+      row('Categories', p.categories);
+      row('Pack size', p.quantity);
+      row('Labels', p.labels);
+      row('Ingredients', String(p.ingredients_text || '').slice(0, 140));
+      if (!lastProductName && !p.brands) {
+        box.textContent = 'No public record for ' + code + ' — it may be a local/regional code. '
+          + 'Add it manually below, or log use if it is already in inventory.';
+      }
+    }
+    function off() {
+      return fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(code)
+                   + '.json?fields=product_name,generic_name,brands,categories,quantity,labels,ingredients_text')
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j && j.product) render('Open Food Facts', j.product);
+          else box.textContent = 'No public record for ' + code + ' — add it manually below, or log use if it is already in inventory.';
+        })
+        .catch(function () { box.textContent = 'Product lookup unavailable (offline).'; });
+    }
+    fetch('https://world.openproductsfacts.org/api/v2/product/' + encodeURIComponent(code)
+          + '.json?fields=product_name,generic_name,brands,categories,quantity,labels,ingredients_text')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.product && (j.product.product_name || j.product.brands)) render('Open Products Facts', j.product);
+        else return off();
+      })
+      .catch(off);
+  }
+
   function onScan(text) {
     if (cooldown) return;
     cooldown = true;
     setTimeout(function () { cooldown = false; }, 2500);
     beep();
     var code = String(text).trim();
+    showInfo(code);
     if (known[code.toLowerCase()]) {
       logUse(code);
     } else {
@@ -363,19 +408,32 @@ def _camera_scanner_html(api_url, qty, user):
   }
 
   var hq = new Html5Qrcode('mmsai-reader');
-  hq.start(
-    { facingMode: 'environment' },
-    { fps: 10, qrbox: function (vw, vh) { var s = Math.min(vw, vh) * 0.75; return { width: s, height: s }; } },
-    onScan,
-    function () {}
-  ).then(function () {
-    statusEl.textContent = 'Camera live — point it at the item barcode / QR label.';
-  }).catch(function (err) {
-    statusEl.textContent = 'Camera unavailable (' + err + '). Use “Scan / type item code” with a USB reader, or “Pick from list”.';
-  });
-  document.getElementById('mmsai-cam-stop').onclick = function () {
-    hq.stop().then(function () { hq.clear(); statusEl.textContent = 'Camera stopped.'; }).catch(function () {});
-  };
+  var running = false;
+  function startCam() {
+    if (running) return;
+    statusEl.textContent = 'Starting camera…';
+    hq.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: function (vw, vh) { var s = Math.min(vw, vh) * 0.75; return { width: s, height: s }; } },
+      onScan,
+      function () {}
+    ).then(function () {
+      running = true;
+      statusEl.textContent = 'Camera live — point it at any barcode / QR label.';
+    }).catch(function (err) {
+      running = false;
+      statusEl.textContent = 'Camera unavailable (' + err + '). Use “Scan / type item code” with a USB reader, or “Pick from list”.';
+    });
+  }
+  function stopCam() {
+    if (!running) return;
+    hq.stop().then(function () {
+      hq.clear(); running = false;
+      statusEl.textContent = 'Camera stopped — press ▶️ Start camera to scan again.';
+    }).catch(function () { running = false; });
+  }
+  document.getElementById('mmsai-cam-start').onclick = startCam;
+  document.getElementById('mmsai-cam-stop').onclick = stopCam;
 })();
 </script>
 """.replace("__API__", json.dumps(api_url)) \
@@ -806,12 +864,12 @@ def show_dashboard():
                     if st.button("🔄 Refresh stock figures now", key="scan_cam_refresh"):
                         st.rerun()
                     st.caption(
-                        "Scan a code that is already in inventory and its use is logged "
-                        "immediately; scan an unknown retail barcode/QR and an add-to-inventory "
-                        "form opens with the code prefilled (name auto-filled from Open Products "
-                        "Facts when available). Tables above update on the next rerun (this button "
-                        "or Auto-refresh). The browser asks for camera permission once and needs "
-                        "HTTPS."
+                        "Press **▶️ Start camera**, then scan any barcode/QR in the world: a product-"
+                        "info card shows the medicine's name, brand, category and pack size from the "
+                        "Open Products/Food Facts databases. A code already in inventory logs its use; "
+                        "an unknown code opens an add-to-inventory form with the code and (when known) "
+                        "the name prefilled. Tables above update on the next rerun (this button or "
+                        "Auto-refresh). The browser asks for camera permission once and needs HTTPS."
                     )
                 elif scan_mode.startswith("🔎"):
                     scan_code = st.text_input(
