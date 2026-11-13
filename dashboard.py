@@ -11,6 +11,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import joblib, os, time, json, random
+import streamlit.components.v1 as _components
 from datetime import datetime
 
 st.set_page_config(page_title="MMLS-AI Dashboard", page_icon="🏥", layout="wide")
@@ -177,6 +178,96 @@ def _resolve_api_url():
 
 API = _resolve_api_url()
 HOS_COLOR = {"GREEN":"#238636","TEAL":"#1f9e9e","AMBER":"#e3b341","RED":"#f85149","PURPLE":"#8b5cf6"}
+
+def _camera_scanner_html(api_url, qty, user):
+    """In-browser camera barcode/QR scanner (html5-qrcode via CDN).
+
+    Decodes with the device webcam and POSTs /scan straight to the API (CORS is
+    enabled), so a scan logs stock without a Streamlit round-trip. Scanned text is
+    only ever written via textContent, never innerHTML, so a hostile label cannot
+    inject markup into the panel.
+    """
+    return """
+<div id="mmsai-reader" style="width:100%;max-width:440px;margin:0 auto;border-radius:10px;overflow:hidden"></div>
+<div id="mmsai-cam-status" style="text-align:center;color:#8b949e;font-size:13px;margin:8px 0">Starting camera…</div>
+<div style="text-align:center;margin:6px 0">
+  <button id="mmsai-cam-stop" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 14px;cursor:pointer">⏹ Stop camera</button>
+</div>
+<div id="mmsai-cam-log" style="max-width:440px;margin:0 auto"></div>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+(function () {
+  var API  = __API__;
+  var QTY  = __QTY__;
+  var USER = __USER__;
+  var statusEl = document.getElementById('mmsai-cam-status');
+  var logEl    = document.getElementById('mmsai-cam-log');
+  var cooldown = false;
+
+  function line(ok, msg) {
+    var row = document.createElement('div');
+    row.style.cssText = 'padding:5px 9px;margin:4px 0;border-radius:6px;font:12px monospace;'
+      + 'background:' + (ok ? '#12261a' : '#2d1215') + ';color:' + (ok ? '#7ee2a0' : '#ff8f8f');
+    row.textContent = msg;
+    logEl.insertBefore(row, logEl.firstChild);
+    while (logEl.children.length > 8) logEl.removeChild(logEl.lastChild);
+  }
+  function beep() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880; g.gain.value = 0.07; o.start();
+      setTimeout(function () { o.stop(); ctx.close(); }, 110);
+    } catch (e) {}
+  }
+  function onScan(text) {
+    if (cooldown) return;
+    cooldown = true;
+    setTimeout(function () { cooldown = false; }, 2500);
+    beep();
+    var code = String(text).trim();
+    statusEl.textContent = 'Scanned ' + code + ' — logging…';
+    fetch(API + '/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: code, quantity_used: QTY, user: USER })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (res.ok) {
+          line(true, '✅ ' + code + ' → ' + res.j.item_name + ' · new stock ' + res.j.new_stock
+                     + (res.j.alert ? ' ⚠️ LOW' : ''));
+          statusEl.textContent = 'Logged ' + code + '. New stock ' + res.j.new_stock + '.';
+        } else {
+          line(false, '⛔ ' + code + ' → ' + (res.j.error || 'rejected'));
+          statusEl.textContent = 'Not logged: ' + (res.j.error || 'unknown item');
+        }
+      })
+      .catch(function () {
+        line(false, '⛔ ' + code + ' → could not reach the API');
+        statusEl.textContent = 'Network error reaching the API.';
+      });
+  }
+
+  var hq = new Html5Qrcode('mmsai-reader');
+  hq.start(
+    { facingMode: 'environment' },
+    { fps: 10, qrbox: function (vw, vh) { var s = Math.min(vw, vh) * 0.75; return { width: s, height: s }; } },
+    onScan,
+    function () {}
+  ).then(function () {
+    statusEl.textContent = 'Camera live — point it at the item barcode / QR label.';
+  }).catch(function (err) {
+    statusEl.textContent = 'Camera unavailable (' + err + '). Use “Scan / type item code” with a USB reader, or “Pick from list”.';
+  });
+  document.getElementById('mmsai-cam-stop').onclick = function () {
+    hq.stop().then(function () { hq.clear(); statusEl.textContent = 'Camera stopped.'; }).catch(function () {});
+  };
+})();
+</script>
+""".replace("__API__", json.dumps(api_url)) \
+   .replace("__QTY__", json.dumps(int(qty))) \
+   .replace("__USER__", json.dumps(user))
 
 USERS = {
     "medic01":    {"password":"medic123",   "role":"Medic (Role 1)",       "echelon":"Role1"},
@@ -577,21 +668,37 @@ def show_dashboard():
             # ── Scan-to-log panel (mentor review item 4) ──
             st.markdown("#### 📷 Scan to Log Use")
             st.caption(
-                "No typing needed at the point of care. A USB or Bluetooth barcode/QR reader acts "
-                "as a keyboard wedge: focus the *Item code* field, scan the printed label, and the "
-                "code is typed in for you — then press **Log use**. Pick-from-list is the "
-                "touchscreen equivalent when no reader is attached."
+                "Three ways to log use without typing. **Camera scan** turns the phone/laptop "
+                "webcam into a real barcode/QR reader and logs the item the instant it decodes. "
+                "A USB/Bluetooth reader acts as a keyboard wedge into the *Item code* field. "
+                "Pick-from-list is the touchscreen fallback when no scanner is available."
             )
             inv_for_scan = api_get("/inventory") or []
             if not inv_for_scan:
                 st.info("No inventory available for scanning.")
             else:
                 scan_mode = st.radio(
-                    "Method", ["🔎 Scan / type item code", "📋 Pick from list"],
+                    "Method",
+                    ["📷 Camera scan (barcode/QR)", "🔎 Scan / type item code", "📋 Pick from list"],
                     key="scan_mode", horizontal=True, label_visibility="collapsed",
                 )
                 target = None
-                if scan_mode.startswith("🔎"):
+                if scan_mode.startswith("📷"):
+                    cq, cu = st.columns([1, 2])
+                    cam_qty  = cq.number_input("Qty per scan", 1, 50, 1, key="scan_cam_qty")
+                    cam_user = cu.text_input("User", value=st.session_state.username,
+                                             key="scan_cam_user")
+                    _components.html(_camera_scanner_html(API, int(cam_qty), cam_user),
+                                     height=520)
+                    if st.button("🔄 Refresh stock figures now", key="scan_cam_refresh"):
+                        st.rerun()
+                    st.caption(
+                        "Camera scans are logged immediately through the API; the tables above "
+                        "update on the next rerun (this button or Auto-refresh). The browser asks "
+                        "for camera permission once and needs HTTPS. A scanned code is matched "
+                        "exactly like a typed one, so the printable QR labels work here."
+                    )
+                elif scan_mode.startswith("🔎"):
                     scan_code = st.text_input(
                         "Item code", placeholder="Scan or type e.g. ITM004", key="scan_code_input"
                     ).strip()
