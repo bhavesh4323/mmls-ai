@@ -12,6 +12,22 @@ import plotly.express as px
 import requests
 import streamlit as st
 
+# Base delays from lsco_twin/config.py. The twin's delay inputs are HOURS; the
+# two multipliers on the dashboard scale these, so the effective hours/days are
+# shown next to each slider (mentor review item 9).
+BASE_EVAC_H = {"R1 → R2E": 4, "R1 → R3": 16}
+BASE_LINK_H = {"R1 resupply": 4, "R2E resupply": 8, "R3 resupply": 12, "Depot → theatre": 48}
+FACTOR_MAX = 30.0
+
+
+def _fmt_delay(hours):
+    return f"{hours:.0f}h" if hours < 48 else f"{hours:.0f}h ({hours / 24:.1f} days)"
+
+
+def _delay_caption(base, factor):
+    parts = " · ".join(f"{label} {_fmt_delay(h * factor)}" for label, h in base.items())
+    return f"Multiplier applies to **hours**. At {factor:.1f}×: {parts}"
+
 
 def render_twin_dashboard(api_url):
     st.subheader("Large-Scale Combat Operations Digital Twin")
@@ -28,8 +44,24 @@ def render_twin_dashboard(api_url):
         "Casualties per day", min_value=100, max_value=10000, value=2000, step=100
     )
     days = days_col.number_input("Simulation days", min_value=1, max_value=60, value=30)
-    evac = evac_col.slider("Evacuation delay multiplier", 0.0, 5.0, 1.0, 0.5)
-    lift = lift_col.slider("Resupply delay multiplier", 0.0, 5.0, 1.0, 0.5)
+    evac = evac_col.slider(
+        "Evacuation delay multiplier", 0.0, FACTOR_MAX, 1.0, 0.5,
+        help="Scales the evacuation legs (hours). 1.0× = doctrinal baseline, "
+             "higher = Ukraine-type prolonged field care.",
+    )
+    lift = lift_col.slider(
+        "Resupply delay multiplier", 0.0, FACTOR_MAX, 1.0, 0.5,
+        help="Scales every resupply leg (hours). 1.0× = doctrinal baseline, "
+             "higher = contested lift / long lines of communication.",
+    )
+    evac_col.caption(_delay_caption(BASE_EVAC_H, evac))
+    lift_col.caption(_delay_caption(BASE_LINK_H, lift))
+    if max(lift * max(BASE_LINK_H.values()), evac * max(BASE_EVAC_H.values())) > days * 24:
+        st.warning(
+            f"At these multipliers the longest delay ({_fmt_delay(max(lift * max(BASE_LINK_H.values()), evac * max(BASE_EVAC_H.values())))}) "
+            f"is longer than the {days}-day simulation window, so those resupply/evacuation "
+            "movements never complete inside the run. Increase Simulation days to see their effect."
+        )
     stock_days, ddil, national_stock = st.columns(3)
     wh_days = national_stock.slider("National stock (days)", 0, 365, 30)
     order_loss = ddil.slider("Orders lost % (DDIL)", 0, 100, 0, 5)
@@ -42,11 +74,87 @@ def render_twin_dashboard(api_url):
     wbb = wbb_col.slider("Walking blood bank (units/day per R2E)", 0, 120, 0, 10)
     depot_loss = depot_col.checkbox("Theatre depot struck (hour 168)", value=False)
 
-    grp_col, attr_col = st.columns(2)
-    use_grouping = grp_col.checkbox("Enable ABO/Rh blood group constraints", value=False,
-                                    help="Limits WBB output by blood group compatibility (Nye model)")
-    use_attrition = attr_col.checkbox("Enable donor pool attrition", value=False,
-                                      help="Models donor loss from casualties, rotation, illness over time")
+    # ── Walking blood bank model inputs (mentor review item 10) ──
+    with st.expander("🩸 Walking blood bank — ABO/Rh and donor-attrition inputs (Nye et al. 2014)"):
+        st.caption(
+            "The two switches are on/off only — their **magnitudes** are set here: how many "
+            "pre-typed donors each Role 2E starts with, and what fraction of that pool is lost "
+            "per day. Accepted ranges: donor pool **10–1000**, attrition **0–50 %/day**, "
+            "flat WBB inflow **0–200 units/day per R2E**."
+        )
+        grp_col, attr_col = st.columns(2)
+        use_grouping = grp_col.checkbox(
+            "Enable ABO/Rh blood group constraints", value=False,
+            help="Scales every collected unit by the usable fraction (0.97 with the default "
+                 "UK/NATO group mix: AB- 1% and B- 2% cannot be covered by the pool).")
+        use_attrition = attr_col.checkbox(
+            "Enable donor pool attrition", value=False,
+            help="Replaces the flat WBB inflow with a decaying donor pool: "
+                 "pool(t) = donor_pool_init × (1 − attrition)^days, plus a stochastic "
+                 "casualty loss each collection round.")
+        pool_col, rate_col = st.columns(2)
+        donor_pool = pool_col.number_input(
+            "Donor pool per Role 2E (10–1000)", min_value=10, max_value=1000,
+            value=120, step=10, disabled=not use_attrition,
+            help="Nye et al. 2014 used ~120 pre-typed donors at a deployed Role 2.")
+        attrition_pct = rate_col.slider(
+            "Donor attrition (% of pool lost per day, 0–50%)", 0.0, 50.0, 8.0, 0.5,
+            disabled=not use_attrition,
+            help="8%/day is the Nye 2014 Afghanistan figure (casualties, rotation, illness).")
+        if use_attrition and wbb == 0:
+            st.info(
+                "The 'Walking blood bank' slider above is at 0, but with attrition enabled the "
+                f"inflow is driven by the donor pool ({donor_pool} donors) instead, so the "
+                "model still runs."
+            )
+        if st.button("Show ABO/Rh mix and donor-pool projection", key="show_blood_model"):
+            try:
+                bm = requests.get(
+                    f"{api_url}/twin/blood-model",
+                    params={
+                        "days": int(days),
+                        "use_blood_grouping": "true" if use_grouping else "false",
+                        "use_donor_attrition": "true" if use_attrition else "false",
+                        "wbb_units_per_day": wbb,
+                        "donor_pool_init": int(donor_pool),
+                        "donor_attrition_rate": attrition_pct / 100,
+                    },
+                    timeout=30,
+                )
+                bm.raise_for_status()
+                bm_data = bm.json()
+            except (requests.RequestException, ValueError) as exc:
+                st.error(f"Unable to load the blood model: {exc}")
+                bm_data = None
+            if bm_data:
+                dist_c, proj_c = st.columns([1, 2])
+                with dist_c:
+                    st.markdown("**ABO/Rh distribution used**")
+                    st.dataframe(
+                        pd.DataFrame(
+                            [{"Group": g, "Share of donors": f"{share * 100:.0f}%"}
+                             for g, share in bm_data["blood_group_distribution"].items()]
+                        ),
+                        use_container_width=True, hide_index=True,
+                    )
+                    st.metric("Usable fraction after grouping",
+                              f"{bm_data['usable_fraction'] * 100:.0f}%")
+                with proj_c:
+                    st.markdown("**Donor pool and units per Role 2E, day by day**")
+                    proj = pd.DataFrame(bm_data["projection"])
+                    st.dataframe(proj, use_container_width=True, hide_index=True)
+                    st.plotly_chart(
+                        px.line(proj, x="day", y=["active_donors", "units_usable"],
+                                title="Donor pool decay vs usable units collected per Role 2E"),
+                        use_container_width=True, config={'displayModeBar': False},
+                    )
+                st.caption(
+                    f"Collection model: {bm_data['collection']['units_per_donor']} unit per donor "
+                    f"every {bm_data['collection']['interval_h']}h. Inputs sent: "
+                    f"pool {bm_data['inputs']['donor_pool_init']}, attrition "
+                    f"{bm_data['inputs']['donor_attrition_rate'] * 100:.1f}%/day, "
+                    f"flat inflow {bm_data['inputs']['wbb_units_per_day']} units/day."
+                )
 
     if st.button("Run static vs dynamic simulation", key="run_twin_simulation"):
         params = {
@@ -59,6 +167,8 @@ def render_twin_dashboard(api_url):
             "wbb_units_per_day": wbb,
             "use_blood_grouping": "true" if use_grouping else "false",
             "use_donor_attrition": "true" if use_attrition else "false",
+            "donor_pool_init": int(donor_pool),
+            "donor_attrition_rate": attrition_pct / 100,
         }
         if surge_hours == "At hour 72":
             params.update(surge_start_h=72, surge_mult=2.5)
@@ -254,6 +364,8 @@ def render_twin_dashboard(api_url):
             "wbb_units_per_day": wbb,
             "use_blood_grouping": "true" if use_grouping else "false",
             "use_donor_attrition": "true" if use_attrition else "false",
+            "donor_pool_init": int(donor_pool),
+            "donor_attrition_rate": attrition_pct / 100,
             "mc_runs": mc_runs,
             "policy": mc_policy,
         }

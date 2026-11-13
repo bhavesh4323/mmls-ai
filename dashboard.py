@@ -358,6 +358,33 @@ def show_dashboard():
             st.session_state.logged_in = False
             st.rerun()
 
+    # ── Auto-refresh (opt-in, mentor review item 3) ──────────────────────────
+    # A fragment timer reruns the whole app on a fixed interval. It is off by
+    # default and only fires when the interval has actually elapsed, so a manual
+    # click or a first render never triggers an extra rerun.
+    ar_col, ar_note = st.columns([1, 3])
+    with ar_col:
+        auto_refresh = st.toggle(
+            "⏱️ Auto-refresh", value=False, key="auto_refresh",
+            help="Re-fetches inventory, alerts and forecasts on a fixed interval so the "
+                 "dashboard stays current without clicking 🔄 Refresh. Off by default.",
+        )
+    if auto_refresh:
+        ar_secs = ar_col.slider("Interval (seconds)", 10, 120, 30, 10, key="auto_refresh_secs")
+        ar_note.caption(
+            f"Auto-refresh ON — data reloads every {ar_secs}s. Widget values are kept between "
+            "refreshes, but switch it off while typing a long entry or mid-scan."
+        )
+
+        @st.fragment(run_every=f"{ar_secs}s")
+        def _auto_refresh_tick():
+            now = time.time()
+            if now - st.session_state.get("_ar_last", 0.0) >= ar_secs - 1:
+                st.session_state["_ar_last"] = now
+                st.rerun(scope="app")
+
+        _auto_refresh_tick()
+
     # KPI cards
     inv_all  = api_get("/inventory")
     if "Role 3" in role:
@@ -546,6 +573,87 @@ def show_dashboard():
     with tab2:
         st.subheader("🔍 Item Search & Registration")
         col_scan, col_qr = st.columns([3, 2])
+        with col_qr:
+            # ── Scan-to-log panel (mentor review item 4) ──
+            st.markdown("#### 📷 Scan to Log Use")
+            st.caption(
+                "No typing needed at the point of care. A USB or Bluetooth barcode/QR reader acts "
+                "as a keyboard wedge: focus the *Item code* field, scan the printed label, and the "
+                "code is typed in for you — then press **Log use**. Pick-from-list is the "
+                "touchscreen equivalent when no reader is attached."
+            )
+            inv_for_scan = api_get("/inventory") or []
+            if not inv_for_scan:
+                st.info("No inventory available for scanning.")
+            else:
+                scan_mode = st.radio(
+                    "Method", ["🔎 Scan / type item code", "📋 Pick from list"],
+                    key="scan_mode", horizontal=True, label_visibility="collapsed",
+                )
+                target = None
+                if scan_mode.startswith("🔎"):
+                    scan_code = st.text_input(
+                        "Item code", placeholder="Scan or type e.g. ITM004", key="scan_code_input"
+                    ).strip()
+                    if scan_code:
+                        target = next(
+                            (i for i in inv_for_scan
+                             if i["item_id"].lower() == scan_code.lower()
+                             or i["item_name"].lower() == scan_code.lower()), None)
+                        if not target:
+                            st.error(f"No inventory item matches “{scan_code}”.")
+                else:
+                    labels = {f"{i['item_id']} — {i['item_name']} (stock {i['current_stock']})": i
+                              for i in inv_for_scan}
+                    target = labels[st.selectbox("Item", list(labels), key="scan_pick")]
+
+                if target:
+                    tc_scan = HOS_COLOR.get(target.get("hos_tier", "GREEN"), "#3fb950")
+                    st.markdown(
+                        f"<div style='background:#161b22;border:1px solid #30363d;"
+                        f"border-left:3px solid {tc_scan};border-radius:8px;padding:10px 12px'>"
+                        f"<b style='color:#c9d1d9'>{target['item_name']}</b><br>"
+                        f"<span style='color:#8b949e;font-size:12px'>{target['item_id']} · "
+                        f"stock <b>{target['current_stock']}</b> · alert threshold "
+                        f"{target.get('alert_threshold', 5)} · HoS "
+                        f"{target.get('hours_of_supply', '—')}h "
+                        f"({target.get('hos_tier', '—')})</span></div>",
+                        unsafe_allow_html=True,
+                    )
+                    sq, su = st.columns([1, 2])
+                    scan_qty  = sq.number_input("Qty", 1, 50, 1, key="scan_qty")
+                    scan_user = su.text_input("User", value=st.session_state.username, key="scan_user")
+                    if st.button("✅ Log use (scan)", use_container_width=True, key="scan_log_btn"):
+                        r = api_post("/scan", {"item_id": target["item_id"],
+                                               "quantity_used": scan_qty, "user": scan_user})
+                        if r:
+                            if r.get("alert"):
+                                st.error(f"⚠️ LOW STOCK: {r['item_name']} → {r['new_stock']} left")
+                            else:
+                                st.success(f"✅ Logged — new stock {r['new_stock']}")
+
+                with st.expander("🏷️ Printable QR labels"):
+                    qr_dir = "qr_codes"
+                    if os.path.isdir(qr_dir):
+                        files = sorted(f for f in os.listdir(qr_dir) if f.lower().endswith(".png"))
+                        if files:
+                            shown = next((f for f in files
+                                          if target and f.startswith(target["item_id"])), files[0])
+                            pick_label = st.selectbox(
+                                "Label", files, index=files.index(shown), key="qr_label_pick")
+                            st.image(os.path.join(qr_dir, pick_label), width=220)
+                            st.caption(
+                                "Print these and stick them on the pack. Scanning one returns the "
+                                "item ID shown in the filename prefix."
+                            )
+                        else:
+                            st.info("The qr_codes/ folder is empty — generate labels first.")
+                    else:
+                        st.info(
+                            "No `qr_codes/` folder in this working directory. The label images ship "
+                            "with the local project (`qr_codes/ITM001_Morphine_10mgml.png`, …); the "
+                            "scan field above works with any reader regardless."
+                        )
         with col_scan:
             st.markdown("#### Search Inventory / Look Up Online")
             
@@ -1068,8 +1176,22 @@ def show_dashboard():
                         st.markdown("**Feature Importance (XGBoost)**")
                         if os.path.exists("feature_importance.png"):
                             st.image("feature_importance.png", width=400)
+                            st.caption(
+                                "Chart generated offline by `trainmodel.py` (step 7) from the fitted "
+                                "XGBoost model. It is a static image, so it does not need the model "
+                                "to be retrained to display."
+                            )
                         else:
-                            st.info("Run train_model.py to generate feature_importance.png")
+                            st.info(
+                                "ℹ️ **Optional artefact missing — not an error.** The forecast above is "
+                                "fully working; only the feature-importance chart is absent because "
+                                "`feature_importance.png` is not in the current working directory.\n\n"
+                                "To regenerate it: `py trainmodel.py` (trains XGBoost on "
+                                "`training_data (1).csv`, writes `model.pkl` and "
+                                "`feature_importance.png`). The deployed dashboard and the GitHub "
+                                "repo both include the PNG, so this notice only appears on a fresh "
+                                "local checkout without the training artefacts."
+                            )
                     df_show = df_p[["item_id","item_name","current_stock",
                                     "predicted_rate","hours_of_supply","hos_tier"]]
                     df_show.columns = ["ID","Name","Stock","Rate (u/hr)","HoS (hrs)","Tier"]
@@ -1080,6 +1202,12 @@ def show_dashboard():
         with tab6:
             st.subheader("LSTM Surge Trend Model")
             st.caption("LSTM predicts consumption trends over time — detects MASCAL surges.")
+            st.caption(
+                "Offline-artefact model: the LSTM is trained separately and the dashboard replays "
+                "its saved 48-hour output (`lstm_actual.npy`, `lstm_preds.npy`, `lstm_hours.npy`). "
+                "The trained weights (`lstm_model.keras`, `lstm_scaler.pkl`) ship with the repo but "
+                "are not loaded at runtime, so this tab needs no TensorFlow install."
+            )
             try:
                 actual    = np.load("lstm_actual.npy")
                 preds_arr = np.load("lstm_preds.npy")
@@ -1110,8 +1238,19 @@ def show_dashboard():
                 with c2: st.metric("LSTM MSE", f"{mse:.4f}")
                 with c3: st.metric("Purpose",  "Surge Detection")
                 st.info("💡 LSTM tracks consumption trends over time. XGBoost predicts per-item demand. Together they provide complete AI coverage.")
-            except FileNotFoundError:
-                st.warning("LSTM files not found. Make sure lstm_actual.npy, lstm_preds.npy, lstm_hours.npy are in the mmsai folder.")
+            except FileNotFoundError as exc:
+                st.warning(
+                    f"ℹ️ **Optional artefact missing — not an error.** `{exc.filename}` is not in the "
+                    "current working directory, so the saved LSTM trend cannot be replayed.\n\n"
+                    "**What to do:** run Streamlit from the project root "
+                    "(`cd mmsai` → `py -m streamlit run dashboard.py`) so the three artefacts — "
+                    "`lstm_actual.npy`, `lstm_preds.npy`, `lstm_hours.npy` — resolve. They are "
+                    "committed in the GitHub repo and present on the deployed dashboard; this "
+                    "notice only appears on a checkout that is missing them. Everything else "
+                    "(inventory, XGBoost forecast, Hours of Supply, digital twin) is unaffected — "
+                    "the LSTM is a supplementary surge-detection view, not a dependency of the "
+                    "live forecasting path."
+                )
 
     # ── TAB 4: HOURS OF SUPPLY ────────────────────────────────────────────────
     with tab4:
@@ -1147,21 +1286,149 @@ def show_dashboard():
                 font_color="#c9d1d9",height=560,xaxis_title="Hours of Supply")
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
+            # ── Resupply requests: how a medic reorders (mentor review item 2) ──
+            st.markdown("---")
+            st.subheader("📤 Resupply Requests")
+            st.caption(
+                "The reorder policy is the digital twin's own, applied to live inventory: "
+                "**Role 1 / Role 2** reorder when hours of supply fall below **12h** and refill to "
+                "**48h**; **Role 3** reorders below **36h** and refills to **72h**. The suggested "
+                "quantity is `target hours × consumption rate − current stock − pending requests`, "
+                "so the medic never calculates it. A logistician (Role 3) approves or rejects; "
+                "approval credits the stock and writes an audit entry."
+            )
+            is_logistician = "Role 3" in role
+            if not is_logistician:
+                below = [r for r in hos_data
+                         if r.get("needs_reorder") and r.get("echelon") == st.session_state.echelon]
+                if below:
+                    st.markdown(f"**{len(below)} item(s) at or below their reorder point**")
+                    st.dataframe(
+                        pd.DataFrame(below)[["item_id", "item_name", "current_stock",
+                                             "hours_of_supply", "hos_tier", "reorder_point_h",
+                                             "target_h", "suggested_qty"]],
+                        use_container_width=True, hide_index=True)
+                    opt_col, qty_col, btn_col = st.columns([3, 1, 1])
+                    options = {f"{r['item_id']} — {r['item_name']} ({r['hours_of_supply']}h left)": r
+                               for r in below}
+                    picked  = opt_col.selectbox("Item to reorder", list(options), key="reorder_pick")
+                    p_row   = options[picked]
+                    qty_req = qty_col.number_input("Qty", 1, 100000,
+                                                   int(p_row.get("suggested_qty", 1)),
+                                                   key=f"reorder_qty_{p_row['item_id']}")
+                    reason  = opt_col.text_input("Reason (optional)", key="reorder_reason",
+                                                 placeholder="e.g. MASCAL standby, Role 1 aid post")
+                    if btn_col.button("📤 Send request", use_container_width=True, key="reorder_send"):
+                        r = api_post("/resupply_request", {
+                            "item_id": p_row["item_id"], "qty": int(qty_req),
+                            "requested_by": st.session_state.username, "reason": reason})
+                        if r and "_id" in r:
+                            st.success(f"✅ Request sent — {r['qty']} × {r['item_name']} "
+                                       f"queued for Role 3 approval.")
+                        else:
+                            st.error(f"Request failed: {r}")
+                else:
+                    st.success("No item at your echelon is below its reorder point — nothing to order.")
+
+            try:
+                _rr = _api_request("get", "/resupply_requests?limit=100")
+                requests_log = _rr.json() if _rr is not None and _rr.status_code == 200 else []
+            except Exception:
+                requests_log = []
+            if not isinstance(requests_log, list):
+                requests_log = []
+            if is_logistician:
+                pending = [r for r in requests_log if r.get("status") == "PENDING"]
+                st.markdown(f"**Role 3 approval queue — {len(pending)} pending**")
+                if not pending:
+                    st.info("No pending resupply requests.")
+                for req in pending:
+                    pc1, pc2, pc3 = st.columns([4, 1, 1])
+                    with pc1:
+                        st.markdown(
+                            f"<div style='background:#161b22;border:1px solid #30363d;"
+                            f"border-left:3px solid {HOS_COLOR.get(req.get('tier_at_request','GREEN'),'#8b949e')};"
+                            f"border-radius:8px;padding:8px 12px;margin-bottom:6px'>"
+                            f"<b style='color:#c9d1d9'>{req['item_name']}</b> "
+                            f"<span style='color:#8b949e'>({req['item_id']} · {req['echelon']})</span><br>"
+                            f"<span style='color:#8b949e;font-size:12px'>Qty <b>{req['qty']}</b> · "
+                            f"requested by {req['requested_by']} at {req['created_at']} · "
+                            f"HoS was {req['hos_at_request']}h ({req['tier_at_request']})"
+                            + (f" · “{req['reason']}”" if req.get('reason') else "")
+                            + "</span></div>", unsafe_allow_html=True)
+                    with pc2:
+                        if st.button("✅ Approve", key=f"ap_{req['_id']}", use_container_width=True):
+                            res = api_post(f"/resupply_request/{req['_id']}/decision",
+                                           {"action": "approve",
+                                            "decided_by": st.session_state.username})
+                            if res:
+                                st.success(f"Approved — stock now {res.get('new_stock')}")
+                            else:
+                                st.error("Approval failed")
+                            st.rerun()
+                    with pc3:
+                        if st.button("✖ Reject", key=f"rj_{req['_id']}", use_container_width=True):
+                            api_post(f"/resupply_request/{req['_id']}/decision",
+                                     {"action": "reject",
+                                      "decided_by": st.session_state.username})
+                            st.rerun()
+            elif requests_log:
+                mine = [r for r in requests_log
+                        if r.get("requested_by") == st.session_state.username]
+                if mine:
+                    st.markdown("**Your requests**")
+                    st.dataframe(
+                        pd.DataFrame(mine)[["item_id", "item_name", "qty", "status",
+                                            "created_at", "decided_by", "decided_at"]],
+                        use_container_width=True, hide_index=True)
+
     # ── TAB 7: CROSS-ECHELON MAP ──────────────────────────────────────────────
     if tab7:
         with tab7:
             st.subheader("Cross-Echelon Supply Chain View")
             st.caption("Multi-echelon visibility across Role 1, 2 and 3 facilities")
-            st.caption("Positioning inputs: geographic coordinates reflect a realistic theatre layout — R1 forward (closest to contact), R2 mid-distance (FST), R3 rear area (general hospital). Nodes are ~80-120 km apart to represent typical echelon spacing in LSCO.")
-            echelons = [
-                {"node":"R1-ALPHA","role":"Role 1","lat":28.30,"lon":76.80,
-                 "items":8,"avg_hos":round(random.uniform(6,18),1),"tier":"AMBER","personnel":12},
-                {"node":"R2-BRAVO","role":"Role 2","lat":28.55,"lon":77.18,
-                 "items":7,"avg_hos":round(random.uniform(14,26),1),"tier":"TEAL","personnel":28},
-                {"node":"R3-CHARLIE","role":"Role 3","lat":28.85,"lon":77.60,
-                 "items":20,"avg_hos":round(random.uniform(28,48),1),"tier":"GREEN","personnel":85},
+
+            # Declared theatre layout (mentor review item 7). There is no GPS feed:
+            # lat/lon and establishment sizes are planning constants for a notional
+            # ~80-120 km echelon spacing (R1 forward, R2 mid-distance FST, R3 rear).
+            # Replace these three rows with surveyed coordinates to plot a real area
+            # of operations. Everything else on this tab — item counts, average
+            # hours of supply and tier — is computed from the live /hours_of_supply
+            # response, keyed by the `echelon` field stored on each inventory record.
+            NODE_LAYOUT = [
+                {"node":"R1-ALPHA",  "role":"Role 1","echelon":"Role1","lat":28.30,"lon":76.80,"personnel":12},
+                {"node":"R2-BRAVO",  "role":"Role 2","echelon":"Role2","lat":28.55,"lon":77.18,"personnel":28},
+                {"node":"R3-CHARLIE","role":"Role 3","echelon":"Role3","lat":28.85,"lon":77.60,"personnel":85},
             ]
+            hos_rows = api_get("/hours_of_supply") or []
+            echelons = []
+            for layout in NODE_LAYOUT:
+                live = [r for r in hos_rows if r.get("echelon") == layout["echelon"]]
+                if live:
+                    worst = min(live, key=lambda r: r.get("hours_of_supply", 999))
+                    avg   = sum(r.get("hours_of_supply", 0) for r in live) / len(live)
+                    echelons.append({**layout, "items": len(live),
+                                     "avg_hos": round(min(avg, 999), 1),
+                                     "tier": worst.get("hos_tier", "GREEN"),
+                                     "source": f"live · worst item {worst.get('item_id','?')}"})
+                else:
+                    echelons.append({**layout, "items": 0, "avg_hos": 0.0, "tier": "—",
+                                     "source": "no inventory records at this echelon"})
             df_eco = pd.DataFrame(echelons)
+            with st.expander("ℹ️ Where the map's geographic data comes from"):
+                st.markdown(
+                    "| Field | Source |\n|---|---|\n"
+                    "| Latitude / longitude | **Declared constants** in `NODE_LAYOUT` "
+                    "(`dashboard.py`, Cross-Echelon Map tab) — a notional theatre layout, not a GPS feed |\n"
+                    "| Node name, role, personnel | Same `NODE_LAYOUT` constants (establishment placeholders) |\n"
+                    "| Item count | Counted from `GET /hours_of_supply`, grouped by the `echelon` "
+                    "field on each MongoDB `inventory` document |\n"
+                    "| Avg HoS | Mean of `hours_of_supply` across that echelon's live items |\n"
+                    "| Tier | `hos_tier` of the **worst** (lowest HoS) item at that echelon, PID §9.3 bands |\n\n"
+                    "**To plot a real area of operations:** edit the three `lat`/`lon` pairs in "
+                    "`NODE_LAYOUT`, or add `lat`/`lon` fields to the inventory documents and read "
+                    "them here instead. No other code depends on these coordinates."
+                )
             col_map, col_tbl = st.columns([2,1])
             with col_map:
                 fig = go.Figure()
@@ -1169,7 +1436,7 @@ def show_dashboard():
                     fig.add_trace(go.Scattergeo(
                         lon=[row["lon"]],lat=[row["lat"]],
                         mode="markers+text",
-                        marker=dict(size=14,color=HOS_COLOR[row["tier"]],
+                        marker=dict(size=14,color=HOS_COLOR.get(row["tier"], "#8b949e"),
                                     line=dict(width=2,color="white")),
                         text=[row["node"]],textposition="bottom center",
                         textfont=dict(color="#ffffff",size=11),
@@ -1184,7 +1451,8 @@ def show_dashboard():
                     title="Echelon Supply Chain",title_font=dict(color="#ffffff", size=16),font=dict(color="#c9d1d9"),
                     geo=dict(showland=True,landcolor="#161b22",showocean=True,
                              oceancolor="#0d1117",showcountries=True,countrycolor="#30363d",
-                             center=dict(lat=28.55,lon=77.18),projection_scale=3.5,
+                             center=dict(lat=float(df_eco["lat"].mean()),lon=float(df_eco["lon"].mean())),
+                             projection_scale=3.5,
                              bgcolor="#0d1117"),
                     paper_bgcolor="#161b22",font_color="#c9d1d9",height=420,margin=dict(l=0, r=0, t=40, b=0),
                     legend=dict(
@@ -1196,7 +1464,7 @@ def show_dashboard():
             with col_tbl:
                 st.markdown("**Node Status**")
                 for _,row in df_eco.iterrows():
-                    tc = HOS_COLOR[row["tier"]]
+                    tc = HOS_COLOR.get(row["tier"], "#8b949e")
                     st.markdown(f"""
                     <div style='background:#161b22;border:1px solid #30363d;
                                 border-left:3px solid {tc};border-radius:8px;
@@ -1204,9 +1472,10 @@ def show_dashboard():
                       <b style='color:#c9d1d9;font-size:13px'>{row["node"]}</b>
                       <span style='color:{tc};font-size:11px;float:right'>{row["tier"]}</span><br>
                       <span style='color:#8b949e;font-size:11px'>{row["role"]} · {row["personnel"]} personnel<br>
-                      Avg HoS: {row["avg_hos"]}h · {row["items"]} item types</span>
+                      Avg HoS: {row["avg_hos"]}h · {row["items"]} item types<br>
+                      <i>{row["source"]}</i></span>
                     </div>""", unsafe_allow_html=True)
-                st.markdown("**Resupply Pipeline**")
+                st.markdown("**Resupply Pipeline** *(illustrative example — not a live feed)*")
                 for p in [
                     {"from":"R3-CHARLIE","to":"R2-BRAVO","item":"IV Fluids x50","eta":"2h","status":"🚛 In Transit"},
                     {"from":"R2-BRAVO","to":"R1-ALPHA","item":"Tourniquets x20","eta":"45min","status":"📦 Packed"},
@@ -1222,12 +1491,18 @@ def show_dashboard():
     if tab8:
         with tab8:
             st.subheader("Validation Scenarios")
-            sc1,sc2,sc3 = st.tabs(["Scenario 1 — Low Stock Alert",
+            sc1,sc2,sc3,sc4 = st.tabs(["Scenario 1 — Low Stock Alert",
                                     "Scenario 2 — MASCAL Surge",
-                                    "Scenario 3 — Controlled Drug Audit"])
+                                    "Scenario 3 — Controlled Drug Audit",
+                                    "🤖 Automated Self-Test (all items)"])
             with sc1:
                 st.markdown("**Deplete tourniquet stock until alert fires**")
                 st.info("Logs 12 tourniquet uses. Stock drops below threshold (10) → LOW STOCK alert fires.")
+                st.caption(
+                    "This scenario is a single-item demonstration (ITM004, hard-coded). To test the "
+                    "alert on **every** item without clicking per item, use the "
+                    "🤖 Automated Self-Test tab."
+                )
                 if st.button("▶️ Run Scenario 1", use_container_width=True):
                     results = []
                     prog = st.progress(0)
@@ -1294,6 +1569,135 @@ def show_dashboard():
                     if morph:
                         st.dataframe(pd.DataFrame(morph[:10]), use_container_width=True)
                         st.success(f"✅ PASS — All {len(morph)} morphine uses recorded in audit log")
+
+            with sc4:
+                st.markdown("**Automated self-test — every check, every item, one click**")
+                st.caption(
+                    "Scenarios 1-3 above each test one hard-coded item (ITM004, ITM001). This "
+                    "self-test loops over **all** items returned by `GET /inventory`, drives each "
+                    "one down to its own `alert_threshold` through the real `POST /scan` write path, "
+                    "then re-runs the MASCAL surge check and the controlled-drug audit check. "
+                    "Nothing has to be run per item manually."
+                )
+                st.warning(
+                    "This consumes real stock in the demo database (same write path Scenario 1 "
+                    "uses). Run it before a demonstration, then restore stock with Reset Database "
+                    "or by re-seeding."
+                )
+                cap = st.slider("Max scans per item (safety cap)", 1, 60, 30, key="selftest_cap")
+                if st.button("▶️ Run automated self-test", use_container_width=True, key="run_selftest"):
+                    inv = api_get("/inventory") or []
+                    if not inv:
+                        st.error("The API returned no inventory — cannot self-test.")
+                    else:
+                        # ── Test 1: low-stock alert fires for every item ──
+                        prog = st.progress(0.0, text=f"Test 1/3 — low-stock alert across {len(inv)} items")
+                        rows = []
+                        for n, item in enumerate(inv):
+                            iid       = item["item_id"]
+                            threshold = int(item.get("alert_threshold", 5))
+                            stock     = int(item.get("current_stock", 0))
+                            needed    = max(0, stock - threshold + 1)
+                            sent      = min(needed, cap)
+                            fired     = bool(item.get("alert")) and needed == 0
+                            last      = stock
+                            for _ in range(sent):
+                                r = api_post("/scan", {"item_id": iid, "quantity_used": 1,
+                                                       "user": "SelfTest"})
+                                if not r:
+                                    break
+                                last  = r.get("new_stock", last)
+                                fired = fired or bool(r.get("alert"))
+                            if needed == 0:
+                                verdict = "PASS (already below threshold)" if fired else "FAIL"
+                            elif needed > cap:
+                                verdict = f"SKIPPED (needs {needed} scans, cap {cap})"
+                            else:
+                                verdict = "PASS" if fired else "FAIL"
+                            rows.append({
+                                "Item": iid, "Name": item.get("item_name", ""),
+                                "Start stock": stock, "Alert threshold": threshold,
+                                "Scans needed": needed, "Scans sent": sent,
+                                "Stock after": last, "Alert fired": fired, "Result": verdict,
+                            })
+                            prog.progress((n + 1) / len(inv))
+                            time.sleep(0.02)
+                        df_t1 = pd.DataFrame(rows)
+                        st.markdown("**Test 1 — low-stock alert per item**")
+                        st.dataframe(df_t1, use_container_width=True, hide_index=True)
+
+                        # ── Test 2: MASCAL surge re-forecasts and re-tiers ──
+                        prog.progress(0.0, text="Test 2/3 — MASCAL surge forecast")
+                        surge = api_get("/forecast?operational_tempo=1.0&t1=0.5&t2=0.2&t3=0.1")
+                        base  = api_get("/forecast?operational_tempo=0.1&t1=0.1&t2=0.1&t3=0.1")
+                        t2_rows = []
+                        if surge and base and "predictions" in surge:
+                            s_map = {p["item_id"]: p for p in surge["predictions"]}
+                            b_map = {p["item_id"]: p for p in base["predictions"]}
+                            for iid, sp in s_map.items():
+                                bp = b_map.get(iid, {})
+                                rose = sp["predicted_rate"] >= bp.get("predicted_rate", 0)
+                                t2_rows.append({
+                                    "Item": iid,
+                                    "Peacetime rate": bp.get("predicted_rate", "—"),
+                                    "MASCAL rate": sp["predicted_rate"],
+                                    "Rate increased": rose,
+                                    "MASCAL tier": sp["hos_tier"],
+                                    "Result": "PASS" if rose else "FAIL",
+                                })
+                            prog.progress(1.0)
+                        df_t2 = pd.DataFrame(t2_rows)
+                        st.markdown("**Test 2 — surge raises every predicted rate and re-tiers**")
+                        if df_t2.empty:
+                            st.error("FAIL — /forecast returned no predictions")
+                        else:
+                            st.dataframe(df_t2, use_container_width=True, hide_index=True)
+
+                        # ── Test 3: controlled drugs land in the audit trail ──
+                        prog.progress(0.0, text="Test 3/3 — controlled drug audit trail")
+                        controlled = [i for i in inv if i.get("controlled_drug")]
+                        for c_item in controlled:
+                            api_post("/scan", {"item_id": c_item["item_id"], "quantity_used": 1,
+                                               "user": "SelfTest"})
+                        logs = api_get("/audit_log") or []
+                        selftest_logs = [l for l in logs if l.get("user") == "SelfTest"]
+                        t3_rows = [{
+                            "Item": c_item["item_id"],
+                            "Name": c_item.get("item_name", ""),
+                            "Audit entries": sum(1 for l in selftest_logs
+                                                 if l.get("item_id") == c_item["item_id"]),
+                            "Flagged controlled": any(l.get("controlled") for l in selftest_logs
+                                                      if l.get("item_id") == c_item["item_id"]),
+                        } for c_item in controlled]
+                        for r3 in t3_rows:
+                            r3["Result"] = ("PASS" if r3["Audit entries"] > 0
+                                            and r3["Flagged controlled"] else "FAIL")
+                        prog.progress(1.0)
+                        df_t3 = pd.DataFrame(t3_rows)
+                        st.markdown("**Test 3 — controlled-drug scans recorded and flagged**")
+                        if df_t3.empty:
+                            st.info("No controlled drugs in inventory — test not applicable.")
+                        else:
+                            st.dataframe(df_t3, use_container_width=True, hide_index=True)
+
+                        # ── Verdict ──
+                        frames = [df for df in (df_t1, df_t2, df_t3) if not df.empty]
+                        all_rows = pd.concat(frames) if frames else pd.DataFrame(columns=["Result"])
+                        passed  = int(all_rows["Result"].str.startswith("PASS").sum())
+                        failed  = int((all_rows["Result"] == "FAIL").sum())
+                        skipped = int(all_rows["Result"].str.startswith("SKIPPED").sum())
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Checks run", len(all_rows))
+                        m2.metric("Passed", passed)
+                        m3.metric("Failed", failed)
+                        m4.metric("Skipped (cap)", skipped)
+                        if failed == 0:
+                            st.success(
+                                f"✅ SELF-TEST PASS — {passed}/{len(all_rows)} checks passed across "
+                                f"{len(inv)} items ({skipped} skipped by the safety cap)."
+                            )
+                        else:
+                            st.error(f"❌ SELF-TEST FAIL — {failed} check(s) did not pass. See the tables above.")
 
     # ── TAB 5: AUDIT LOG ──────────────────────────────────────────────────────
     with tab5:
