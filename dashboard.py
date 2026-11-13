@@ -182,16 +182,54 @@ HOS_COLOR = {"GREEN":"#238636","TEAL":"#1f9e9e","AMBER":"#e3b341","RED":"#f85149
 def _camera_scanner_html(api_url, qty, user):
     """In-browser camera barcode/QR scanner (html5-qrcode via CDN).
 
-    Decodes with the device webcam and POSTs /scan straight to the API (CORS is
-    enabled), so a scan logs stock without a Streamlit round-trip. Scanned text is
-    only ever written via textContent, never innerHTML, so a hostile label cannot
-    inject markup into the panel.
+    Decodes with the device webcam and talks straight to the API (CORS is enabled),
+    so a scan needs no Streamlit round-trip. A code already in inventory logs stock
+    use via /scan; an unknown code opens an inline form that registers it as a new
+    inventory item via /register_item (name optionally prefilled from Open Products
+    Facts), so any medicine can be added by scanning its retail barcode/QR. Scanned
+    text is only ever written via textContent, never innerHTML, so a hostile label
+    cannot inject markup into the panel.
     """
     return """
 <div id="mmsai-reader" style="width:100%;max-width:440px;margin:0 auto;border-radius:10px;overflow:hidden"></div>
 <div id="mmsai-cam-status" style="text-align:center;color:#8b949e;font-size:13px;margin:8px 0">Starting camera…</div>
 <div style="text-align:center;margin:6px 0">
   <button id="mmsai-cam-stop" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 14px;cursor:pointer">⏹ Stop camera</button>
+</div>
+<div id="mmsai-reg" style="display:none;max-width:440px;margin:10px auto;padding:12px 14px;background:#161b22;border:1px solid #30363d;border-radius:10px">
+  <div style="color:#c9d1d9;font-weight:600;margin-bottom:4px">➕ New item from this scan</div>
+  <div id="mmsai-reg-code" style="font:12px monospace;color:#8b949e;margin-bottom:8px"></div>
+  <label style="display:block;color:#8b949e;font-size:12px;margin-bottom:8px">Item name
+    <input id="mmsai-reg-name" placeholder="e.g. Paracetamol 500mg" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px">
+  </label>
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <label style="flex:1;color:#8b949e;font-size:12px">Category
+      <select id="mmsai-reg-cat" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 4px">
+        <option>Medicine</option><option>Consumable</option><option>Equipment</option><option>Blood</option><option>Other</option>
+      </select>
+    </label>
+    <label style="flex:1;color:#8b949e;font-size:12px">Echelon
+      <select id="mmsai-reg-ech" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 4px">
+        <option>Role1</option><option>Role2</option><option>Role3</option>
+      </select>
+    </label>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <label style="flex:1;color:#8b949e;font-size:12px">Stock
+      <input id="mmsai-reg-stock" type="number" value="1" min="0" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px">
+    </label>
+    <label style="flex:1;color:#8b949e;font-size:12px">Alert at
+      <input id="mmsai-reg-alert" type="number" value="5" min="0" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px">
+    </label>
+    <label style="flex:1;color:#8b949e;font-size:12px">Use / hr
+      <input id="mmsai-reg-rate" type="number" value="1" min="0" step="0.1" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px">
+    </label>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button id="mmsai-reg-add" style="flex:1;background:#238636;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;font-weight:600">➕ Add to inventory</button>
+    <button id="mmsai-reg-cancel" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px 12px;cursor:pointer">Cancel</button>
+  </div>
+  <div id="mmsai-reg-note" style="color:#8b949e;font-size:11px;margin-top:6px"></div>
 </div>
 <div id="mmsai-cam-log" style="max-width:440px;margin:0 auto"></div>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -221,12 +259,74 @@ def _camera_scanner_html(api_url, qty, user):
       setTimeout(function () { o.stop(); ctx.close(); }, 110);
     } catch (e) {}
   }
-  function onScan(text) {
-    if (cooldown) return;
-    cooldown = true;
-    setTimeout(function () { cooldown = false; }, 2500);
-    beep();
-    var code = String(text).trim();
+  // Cache of known item codes so a scan can tell "log use" from "new item".
+  var known = {};
+  function loadInventory() {
+    return fetch(API + '/inventory').then(function (r) { return r.json(); }).then(function (list) {
+      known = {};
+      (list || []).forEach(function (it) { known[String(it.item_id).toLowerCase()] = true; });
+    }).catch(function () { known = {}; });
+  }
+  loadInventory();
+
+  var regEl   = document.getElementById('mmsai-reg');
+  var curCode = '';
+  function showRegister(code) {
+    curCode = code;
+    document.getElementById('mmsai-reg-code').textContent = 'Scanned code: ' + code + ' (not in inventory yet)';
+    document.getElementById('mmsai-reg-name').value = '';
+    document.getElementById('mmsai-reg-note').textContent = 'Looking up the product name…';
+    regEl.style.display = 'block';
+    statusEl.textContent = 'Unknown code — check the details and add it to inventory.';
+    // Best-effort public lookup so a retail barcode can prefill its name.
+    fetch('https://world.openproductsfacts.org/api/v2/product/' + encodeURIComponent(code)
+          + '.json?fields=product_name,brands')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var p = j && j.product;
+        var name = p && (p.product_name || p.generic_name) || '';
+        var brand = p && p.brands ? String(p.brands).split(',')[0] : '';
+        if (name) document.getElementById('mmsai-reg-name').value = (brand ? brand + ' ' : '') + name;
+        document.getElementById('mmsai-reg-note').textContent =
+          name ? 'Name auto-filled from Open Products Facts — edit if needed.'
+               : 'Not in the public product database — type the name yourself.';
+      })
+      .catch(function () {
+        document.getElementById('mmsai-reg-note').textContent = 'Type the item name yourself.';
+      });
+  }
+  document.getElementById('mmsai-reg-cancel').onclick = function () { regEl.style.display = 'none'; };
+  document.getElementById('mmsai-reg-add').onclick = function () {
+    var name  = document.getElementById('mmsai-reg-name').value.trim() || curCode;
+    var body  = {
+      item_id: curCode,
+      item_name: name,
+      category: document.getElementById('mmsai-reg-cat').value,
+      echelon: document.getElementById('mmsai-reg-ech').value,
+      current_stock: parseInt(document.getElementById('mmsai-reg-stock').value, 10) || 0,
+      alert_threshold: parseInt(document.getElementById('mmsai-reg-alert').value, 10) || 0,
+      avg_consumption_per_hour: parseFloat(document.getElementById('mmsai-reg-rate').value) || 1
+    };
+    fetch(API + '/register_item', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (res.ok) {
+          known[curCode.toLowerCase()] = true;
+          regEl.style.display = 'none';
+          line(true, '➕ ' + curCode + ' added as “' + name + '” · stock ' + body.current_stock);
+          statusEl.textContent = 'Added ' + name + '. Scanning it again now logs use.';
+        } else {
+          line(false, '⛔ add failed → ' + (res.j.error || 'rejected'));
+          statusEl.textContent = 'Add failed: ' + (res.j.error || 'see log');
+        }
+      })
+      .catch(function () { line(false, '⛔ ' + curCode + ' → could not reach the API'); });
+  };
+
+  function logUse(code) {
     statusEl.textContent = 'Scanned ' + code + ' — logging…';
     fetch(API + '/scan', {
       method: 'POST',
@@ -247,6 +347,19 @@ def _camera_scanner_html(api_url, qty, user):
         line(false, '⛔ ' + code + ' → could not reach the API');
         statusEl.textContent = 'Network error reaching the API.';
       });
+  }
+
+  function onScan(text) {
+    if (cooldown) return;
+    cooldown = true;
+    setTimeout(function () { cooldown = false; }, 2500);
+    beep();
+    var code = String(text).trim();
+    if (known[code.toLowerCase()]) {
+      logUse(code);
+    } else {
+      showRegister(code);
+    }
   }
 
   var hq = new Html5Qrcode('mmsai-reader');
@@ -693,10 +806,12 @@ def show_dashboard():
                     if st.button("🔄 Refresh stock figures now", key="scan_cam_refresh"):
                         st.rerun()
                     st.caption(
-                        "Camera scans are logged immediately through the API; the tables above "
-                        "update on the next rerun (this button or Auto-refresh). The browser asks "
-                        "for camera permission once and needs HTTPS. A scanned code is matched "
-                        "exactly like a typed one, so the printable QR labels work here."
+                        "Scan a code that is already in inventory and its use is logged "
+                        "immediately; scan an unknown retail barcode/QR and an add-to-inventory "
+                        "form opens with the code prefilled (name auto-filled from Open Products "
+                        "Facts when available). Tables above update on the next rerun (this button "
+                        "or Auto-refresh). The browser asks for camera permission once and needs "
+                        "HTTPS."
                     )
                 elif scan_mode.startswith("🔎"):
                     scan_code = st.text_input(
