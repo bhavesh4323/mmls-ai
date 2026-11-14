@@ -410,9 +410,8 @@ def _camera_scanner_html(api_url, qty, user):
           + ' · alert ' + mine.alert_threshold + ' · ' + (mine.echelon || ''));
       if (mine.nsn && mine.nsn !== '—') row('NSN', mine.nsn);
     }
-    var tagLabel = { n: 'Holder / patient', dg: 'Medicine', id: 'Label ID',
-                     pm: 'Pack mark', dt: 'Date', in: 'Status' };
-    Object.keys(tags).forEach(function (k) { row(tagLabel[k] || ('Label ' + k), tags[k]); });
+    // Holder/patient and pack metadata stay hidden; the card shows medicine info only.
+    if (tags.in) row('Usage (on label)', tags.in);
     var filled = false, noneShown = false;
     function fill(src, p) {
       if (filled) return; filled = true;
