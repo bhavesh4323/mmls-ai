@@ -265,6 +265,7 @@ def _camera_scanner_html(api_url, qty, user):
     } catch (e) {}
   }
   // Cache of known item codes so a scan can tell "log use" from "new item".
+  // Items added from an XML/QR label also match on their stored raw payload.
   var known = {};
   var invById = {};
   function loadInventory() {
@@ -273,27 +274,43 @@ def _camera_scanner_html(api_url, qty, user):
       (list || []).forEach(function (it) {
         known[String(it.item_id).toLowerCase()] = true;
         invById[String(it.item_id).toLowerCase()] = it;
+        var raw = String(it.barcode_raw || '');
+        if (raw && raw !== '—') { known[raw.toLowerCase()] = true; invById[raw.toLowerCase()] = it; }
       });
     }).catch(function () { known = {}; invById = {}; });
   }
   loadInventory();
 
+  // Turn a raw scan (possibly an XML label) into a clean inventory item code.
+  function cleanItemId(code, payloadName) {
+    if (code.indexOf('<') === -1) return code;
+    var base = payloadName || code.replace(/<[^>]*>/g, ' ');
+    var slug = base.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    return slug || 'ITEM-' + code.length;
+  }
+
   var regEl   = document.getElementById('mmsai-reg');
   var curCode = '';
-  function showRegister(code) {
+  var curId   = '';
+  function showRegister(code, payloadName) {
     curCode = code;
-    document.getElementById('mmsai-reg-code').textContent = 'Scanned code: ' + code + ' (not in inventory yet)';
-    document.getElementById('mmsai-reg-name').value = '';
-    document.getElementById('mmsai-reg-note').textContent =
-      'The product lookup above prefills the name if this is a known retail code.';
+    curId   = cleanItemId(code, payloadName);
+    document.getElementById('mmsai-reg-code').textContent =
+      (payloadName ? 'Medicine: ' + payloadName + ' · ' : '')
+      + 'will be added with item code ' + curId;
+    document.getElementById('mmsai-reg-name').value = payloadName || '';
+    document.getElementById('mmsai-reg-note').textContent = payloadName
+      ? 'Name taken from the QR label — edit if needed.'
+      : 'The product lookup above prefills the name if this is a known retail code.';
     regEl.style.display = 'block';
     statusEl.textContent = 'Unknown code — check the details and add it to inventory.';
   }
   document.getElementById('mmsai-reg-cancel').onclick = function () { regEl.style.display = 'none'; };
   document.getElementById('mmsai-reg-add').onclick = function () {
-    var name  = document.getElementById('mmsai-reg-name').value.trim() || curCode;
+    var name  = document.getElementById('mmsai-reg-name').value.trim() || curId;
     var body  = {
-      item_id: curCode,
+      item_id: curId,
+      barcode_raw: curCode,
       item_name: name,
       category: document.getElementById('mmsai-reg-cat').value,
       echelon: document.getElementById('mmsai-reg-ech').value,
@@ -310,15 +327,16 @@ def _camera_scanner_html(api_url, qty, user):
       .then(function (res) {
         if (res.ok) {
           known[curCode.toLowerCase()] = true;
+          known[curId.toLowerCase()] = true;
           regEl.style.display = 'none';
-          line(true, '➕ ' + curCode + ' added as “' + name + '” · stock ' + body.current_stock);
+          line(true, '➕ ' + curId + ' added as “' + name + '” · stock ' + body.current_stock);
           statusEl.textContent = 'Added ' + name + '. Scanning it again now logs use.';
         } else {
           line(false, '⛔ add failed → ' + (res.j.error || 'rejected'));
           statusEl.textContent = 'Add failed: ' + (res.j.error || 'see log');
         }
       })
-      .catch(function () { line(false, '⛔ ' + curCode + ' → could not reach the API'); });
+      .catch(function () { line(false, '⛔ ' + curId + ' → could not reach the API'); });
   };
 
   function logUse(code) {
@@ -370,11 +388,20 @@ def _camera_scanner_html(api_url, qty, user):
       d.appendChild(b); d.appendChild(document.createTextNode(v));
       box.appendChild(d);
     }
+    // Many medicine QR labels embed structured fields (<dg> drug, <dt> date, …).
+    var tags = {}, payloadName = '';
+    var tagRe = /<([a-zA-Z0-9]+)>([^<]*)<\\/\\1>/g, tagMatch;
+    while ((tagMatch = tagRe.exec(code)) !== null) {
+      if (tagMatch[2].trim()) tags[tagMatch[1]] = tagMatch[2].trim();
+    }
+    payloadName = tags.dg || '';
+    var hasTags = code.indexOf('<') !== -1;
     var t = document.createElement('div');
     t.style.cssText = 'font-weight:600;margin-bottom:4px';
-    t.textContent = 'ℹ️ ' + code;
+    t.textContent = 'ℹ️ ' + (payloadName || (hasTags ? 'QR label' : code));
     box.appendChild(t);
     row('Code type', fmt || 'barcode / QR');
+    if (!hasTags) row('Code', code);
     var country = gs1Country(code);
     if (country) row('GS1 country', country);
     var mine = invById[code.toLowerCase()];
@@ -383,16 +410,9 @@ def _camera_scanner_html(api_url, qty, user):
           + ' · alert ' + mine.alert_threshold + ' · ' + (mine.echelon || ''));
       if (mine.nsn && mine.nsn !== '—') row('NSN', mine.nsn);
     }
-    // Many medicine QR labels embed structured fields (<dg> drug, <dt> date, …).
-    var tags = {}, payloadName = '';
-    var tagRe = /<([a-zA-Z0-9]+)>([^<]*)<\\/\\1>/g, tagMatch;
-    while ((tagMatch = tagRe.exec(code)) !== null) {
-      if (tagMatch[2].trim()) tags[tagMatch[1]] = tagMatch[2].trim();
-    }
     var tagLabel = { n: 'Holder / patient', dg: 'Medicine', id: 'Label ID',
                      pm: 'Pack mark', dt: 'Date', in: 'Status' };
     Object.keys(tags).forEach(function (k) { row(tagLabel[k] || ('Label ' + k), tags[k]); });
-    payloadName = tags.dg || '';
     var filled = false, noneShown = false;
     function fill(src, p) {
       if (filled) return; filled = true;
@@ -451,6 +471,7 @@ def _camera_scanner_html(api_url, qty, user):
       get('world.openfoodfacts.org', 'Open Food Facts')
     ]).then(none);
     setTimeout(none, 6000);
+    return payloadName;
   }
 
   function onScan(text, result) {
@@ -461,11 +482,12 @@ def _camera_scanner_html(api_url, qty, user):
     var code = String(text).trim();
     var fmt = '';
     try { fmt = result.result.format.formatName; } catch (e) {}
-    showInfo(code, fmt);
-    if (known[code.toLowerCase()]) {
-      logUse(code);
+    var pn = showInfo(code, fmt);
+    var hit = invById[code.toLowerCase()];
+    if (hit) {
+      logUse(hit.item_id);
     } else {
-      showRegister(code);
+      showRegister(code, pn);
     }
   }
 
