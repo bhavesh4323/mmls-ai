@@ -666,14 +666,97 @@ def show_login():
       <p style='color:#e07b30;font-size:13px;letter-spacing:4px'>
         POWERED BY BLACK SPACE TECHNOLOGY</p>
     </div>""", unsafe_allow_html=True)
-    _, col, _ = st.columns([1.1,1.8,1.1])
-    with col:
-        
-        st.markdown("<h2 style='color:#c9d1d9;text-align:center;font-size:36px;font-weight:700;margin-bottom:35px'>🔐 Secure Login</h2>",
-                    unsafe_allow_html=True)
-        username = st.text_input("👤Username", )
-        password = st.text_input("🔒Password", type="password")
-        if st.button("🔐 Secure Login", use_container_width=True):
+    st.markdown("""
+    <style>
+    .st-key-login_card {
+        width: 100%; max-width: 440px; margin: 24px auto 40px;
+        padding: 32px; background: #10171c;
+        border: 1px solid #29363e; border-radius: 20px;
+        box-shadow: 0 18px 60px rgba(0,0,0,.28);
+    }
+    .st-key-login_card .login-eyebrow {
+        color: #73dca1 !important; font-size: 11px;
+        font-weight: 700; letter-spacing: 2px; margin: 0 0 12px;
+    }
+    .st-key-login_card h2 {
+        color: #f1f5f7 !important; font-size: 28px;
+        font-weight: 650; letter-spacing: -.6px; padding: 0 0 8px;
+    }
+    .st-key-login_card .login-subtitle {
+        color: #a5b4bf !important; font-size: 14px; margin: 0 0 8px;
+    }
+    .st-key-login_card [data-testid="stForm"] { border: 0; padding: 0; }
+    .st-key-login_card [data-testid="stTextInput"] label p {
+        font-size: 13px; font-weight: 600; color: #dce5eb !important;
+    }
+    .st-key-login_card div[data-baseweb="input"] {
+        min-height: 48px; border: 1px solid #34434d !important;
+        border-radius: 10px; background: #0b1116 !important;
+        transition: border-color 150ms, box-shadow 150ms;
+    }
+    .st-key-login_card div[data-baseweb="input"]:focus-within {
+        border-color: #59cd91 !important;
+        box-shadow: 0 0 0 3px rgba(89,205,145,.15);
+    }
+    .st-key-login_card div[data-baseweb="input"] > div {
+        background: transparent !important;
+    }
+    .st-key-login_card div[data-baseweb="input"] input {
+        border: 0 !important; padding: 12px 14px; font-size: 14px;
+    }
+    .st-key-login_card input::placeholder {
+        color: #889aa7 !important; -webkit-text-fill-color: #889aa7 !important;
+        opacity: 1;
+    }
+    .st-key-login_card div[data-baseweb="input"] button {
+        background: transparent !important; border: 0 !important;
+        color: #a5b4bf !important; padding: 8px 10px !important;
+        box-shadow: none !important; transform: none !important;
+        animation: none !important;
+    }
+    .st-key-login_card div[data-baseweb="input"] button:hover {
+        background: #1c2b34 !important; color: #f1f5f7 !important;
+    }
+    .st-key-login_card [data-testid="stFormSubmitButton"] button {
+        min-height: 48px; margin-top: 8px; border-radius: 10px !important;
+        background: #187b48 !important; border: 1px solid #38b874 !important;
+        transform: none !important; animation: none !important;
+    }
+    .st-key-login_card [data-testid="stFormSubmitButton"] button p {
+        color: #fff !important; font-size: 14px; font-weight: 650;
+    }
+    .st-key-login_card [data-testid="stFormSubmitButton"] button:hover {
+        background: #1b844d !important;
+    }
+    .st-key-login_card button:focus-visible,
+    .st-key-login_card summary:focus-visible {
+        outline: 2px solid #73dca1 !important; outline-offset: 3px;
+    }
+    .st-key-login_card [data-testid="stExpander"] details {
+        border: 0; border-top: 1px solid #29363e; border-radius: 0;
+    }
+    .st-key-login_card [data-testid="stExpander"] summary {
+        padding: 14px 0 0; color: #a5b4bf !important;
+    }
+    @media (max-width: 480px) {
+        .st-key-login_card { padding: 24px 20px; margin-top: 16px; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    with st.container(key="login_card"):
+        st.markdown("""
+        <p class="login-eyebrow">MMLS-AI WORKSPACE</p>
+        <h2>Welcome back</h2>
+        <p class="login-subtitle">Sign in to your logistics dashboard.</p>
+        """, unsafe_allow_html=True)
+        with st.form("login_form", border=False):
+            username = st.text_input("Username", placeholder="Enter your username",
+                                     autocomplete="username")
+            password = st.text_input("Password", type="password",
+                                     placeholder="Enter your password",
+                                     autocomplete="current-password")
+            submitted = st.form_submit_button("Sign in", use_container_width=True)
+        if submitted:
             if username in USERS and USERS[username]["password"] == password:
                 st.session_state.logged_in = True
                 st.session_state.username  = username
@@ -682,13 +765,10 @@ def show_login():
                 st.rerun()
             else:
                 st.error("Invalid username or password")
-        st.markdown("""
-        <div style='margin-top:18px;border-top:1px solid #30363d;padding-top:14px'>
-          <p style='color:#8b949e;font-size:11px;margin:0 0 4px'>Demo credentials:</p>
-          <p style='color:#8b949e;font-size:11px;margin:2px 0'>medic01 / medic123 → Role 1</p>
-          <p style='color:#8b949e;font-size:11px;margin:2px 0'>surgeon01 / surgeon123 → Role 2</p>
-          <p style='color:#8b949e;font-size:11px;margin:2px 0'>logistic01 / admin123 → Role 3 (Admin)</p>
-        </div>""", unsafe_allow_html=True)
+        with st.expander("Demo accounts"):
+            st.caption("Medic (Role 1): medic01 / medic123")
+            st.caption("Surgeon (Role 2): surgeon01 / surgeon123")
+            st.caption("Logistician (Role 3): logistic01 / admin123")
         
 
 # ── MAIN DASHBOARD ─────────────────────────────────────────────────────────────
