@@ -227,6 +227,9 @@ def _camera_scanner_html(api_url, qty, user):
       <input id="mmsai-reg-rate" type="number" value="1" min="0" step="0.1" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px">
     </label>
   </div>
+  <label style="display:block;color:#8b949e;font-size:12px;margin-bottom:8px">NSN — NATO stock number (optional)
+    <input id="mmsai-reg-nsn" placeholder="e.g. 6505-01-123-4567" style="width:100%;margin-top:3px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px 8px">
+  </label>
   <div style="display:flex;gap:8px;align-items:center">
     <button id="mmsai-reg-add" style="flex:1;background:#238636;color:#fff;border:none;border-radius:6px;padding:8px;cursor:pointer;font-weight:600">➕ Add to inventory</button>
     <button id="mmsai-reg-cancel" style="background:#21262d;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px 12px;cursor:pointer">Cancel</button>
@@ -296,7 +299,8 @@ def _camera_scanner_html(api_url, qty, user):
       echelon: document.getElementById('mmsai-reg-ech').value,
       current_stock: parseInt(document.getElementById('mmsai-reg-stock').value, 10) || 0,
       alert_threshold: parseInt(document.getElementById('mmsai-reg-alert').value, 10) || 0,
-      avg_consumption_per_hour: parseFloat(document.getElementById('mmsai-reg-rate').value) || 1
+      avg_consumption_per_hour: parseFloat(document.getElementById('mmsai-reg-rate').value) || 1,
+      nsn: document.getElementById('mmsai-reg-nsn').value.trim() || '—'
     };
     fetch(API + '/register_item', {
       method: 'POST',
@@ -377,7 +381,18 @@ def _camera_scanner_html(api_url, qty, user):
     if (mine) {
       row('In inventory', mine.item_name + ' · stock ' + mine.current_stock
           + ' · alert ' + mine.alert_threshold + ' · ' + (mine.echelon || ''));
+      if (mine.nsn && mine.nsn !== '—') row('NSN', mine.nsn);
     }
+    // Many medicine QR labels embed structured fields (<dg> drug, <dt> date, …).
+    var tags = {}, payloadName = '';
+    var tagRe = /<([a-zA-Z0-9]+)>([^<]*)<\\/\\1>/g, tagMatch;
+    while ((tagMatch = tagRe.exec(code)) !== null) {
+      if (tagMatch[2].trim()) tags[tagMatch[1]] = tagMatch[2].trim();
+    }
+    var tagLabel = { n: 'Holder / patient', dg: 'Medicine', id: 'Label ID',
+                     pm: 'Pack mark', dt: 'Date', in: 'Status' };
+    Object.keys(tags).forEach(function (k) { row(tagLabel[k] || ('Label ' + k), tags[k]); });
+    payloadName = tags.dg || '';
     var filled = false, noneShown = false;
     function fill(src, p) {
       if (filled) return; filled = true;
@@ -392,7 +407,34 @@ def _camera_scanner_html(api_url, qty, user):
         document.getElementById('mmsai-reg-note').textContent =
           'Name auto-filled from ' + src + ' — edit if needed.';
       }
+      if (!payloadName && lastProductName) drugInfo(lastProductName);
     }
+    // Real leaflet text (usage / storage / mechanism) from the openFDA drug-label API.
+    var drugDone = false;
+    function clean(s) {
+      return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().slice(0, 300);
+    }
+    function drugInfo(name) {
+      if (drugDone || !name) return; drugDone = true;
+      function go(search) {
+        return fetch('https://api.fda.gov/drug/label.json?search=' + encodeURIComponent(search) + '&limit=1')
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (j) { return j && j.results && j.results[0] ? j.results[0] : null; })
+          .catch(function () { return null; });
+      }
+      go('openfda.brand_name:"' + name + '"').then(function (lab) {
+        return lab || go('openfda.generic_name:"' + name + '"');
+      }).then(function (lab) {
+        if (!lab) { row('Drug leaflet', 'no openFDA leaflet found for “' + name + '”'); return; }
+        function sec(key, label) { var v = lab[key] && lab[key][0]; if (v) row(label, clean(v)); }
+        sec('indications_and_usage', 'Usage (indications)');
+        sec('dosage_and_administration', 'Dosage');
+        sec('storage_and_handling', 'Storage');
+        sec('clinical_pharmacology', 'How it works');
+        sec('warnings', 'Warnings');
+      });
+    }
+    if (payloadName) drugInfo(payloadName);
     function none() {
       if (filled || noneShown) return; noneShown = true;
       row('Public record', 'none in Open Products/Food Facts (normal for regional medicines) — your inventory details above still apply');
