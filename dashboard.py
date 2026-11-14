@@ -31,7 +31,7 @@ html, body, .stApp, .main, .block-container, [data-testid="stAppViewContainer"] 
     border-right: 1px solid #22272b !important;
 }
 /* Main container spacing */
-.block-container{padding-top:1rem}
+.block-container{padding-top:5rem}
 /* Cards and tiles */
 .metric-card{background:linear-gradient(145deg, #0f1418, #161b22);border:1px solid #30363d;border-radius:10px;padding:16px;text-align:center;box-shadow: 0 4px 12px rgba(0,0,0,0.15);position: relative;overflow: hidden;transition: transform 0.2s ease}.metric-card:hover {transform: translateY(-2px);border-color: #58a6ff;}
 .hos-GREEN {background:#071710;border:1px solid #238636;border-radius:8px;padding:10px;text-align:center}
