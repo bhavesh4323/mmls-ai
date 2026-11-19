@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import joblib, os, time, json, random
+import joblib, os, time, json, random, base64
 import streamlit.components.v1 as _components
 from datetime import datetime
 
@@ -1637,7 +1637,15 @@ def show_dashboard():
                     with col_fi:
                         st.markdown("**Feature Importance (XGBoost)**")
                         if os.path.exists("feature_importance.png"):
-                            st.image("feature_importance.png", width=400)
+                            # Data URI: the deployed Streamlit /media endpoint 500s on Render.
+                            with open("feature_importance.png", "rb") as _fi:
+                                _fi_b64 = base64.b64encode(_fi.read()).decode()
+                            st.markdown(
+                                f'<img src="data:image/png;base64,{_fi_b64}" width="400" '
+                                f'style="max-width:100%;height:auto" '
+                                f'alt="XGBoost feature importance chart">',
+                                unsafe_allow_html=True,
+                            )
                             st.caption(
                                 "Chart generated offline by `trainmodel.py` (step 7) from the fitted "
                                 "XGBoost model. It is a static image, so it does not need the model "
