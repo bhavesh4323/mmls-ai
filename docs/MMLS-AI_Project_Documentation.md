@@ -326,7 +326,7 @@ Uses a trained **XGBoost machine learning model** to predict how fast each medic
 
 ### Output
 
-After clicking **"🤖 Run XGBoost Forecast"**, you see three things:
+After clicking **"🤖 Run XGBoost Forecast"**, you see two things:
 
 **1. Horizontal Bar Chart — "Predicted Consumption"**
 - One bar per item, showing the predicted consumption rate (units/hour)
@@ -334,11 +334,7 @@ After clicking **"🤖 Run XGBoost Forecast"**, you see three things:
 - Chart title shows the parameters used: "Predicted Consumption — Tempo:0.5 T1:0.2 T2:0.2 T3:0.1"
 - **How to read it:** Longer bars = faster consumption = will run out sooner. Red/Purple bars are the most urgent.
 
-**2. Feature Importance Image**
-- Displays `feature_importance.png` — a chart showing which factors the XGBoost model considers most important for predicting demand
-- If the image is missing: "💡 Run train_model.py to generate feature_importance.png"
-
-**3. Results Table**
+**2. Results Table**
 
 | Column | Meaning |
 |---|---|

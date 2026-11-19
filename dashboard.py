@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import joblib, os, time, json, random, base64
+import joblib, os, time, json, random
 import streamlit.components.v1 as _components
 from datetime import datetime
 
@@ -1612,56 +1612,19 @@ def show_dashboard():
                 if data and "predictions" in data:
                     preds = data["predictions"]
                     df_p  = pd.DataFrame(preds)
-                    col_chart, col_fi = st.columns([3,2])
-                    with col_chart:
-                        # Shorten names to 30 chars so they look clean
-                        df_p["short_name"] = df_p["item_name"].apply(lambda x: x if len(str(x)) < 30 else str(x)[:27] + "...")
-                        
-                        fig = px.bar(df_p.sort_values("predicted_rate"),
-                            x="predicted_rate", y="short_name", orientation="h",
-                            color="hos_tier", color_discrete_map=HOS_COLOR,
-                            title=f"Predicted Consumption — Tempo:{tempo} T1:{t1} T2:{t2} T3:{t3}",
-                            labels={"predicted_rate":"Rate (u/hr)", "short_name":""},
-                            hover_data={"item_name": True}) 
-                            
-                        # Removed the restrictive left margin (l=10)
-                        fig.update_layout(plot_bgcolor="#0d1117", paper_bgcolor="#161b22",
-                                          font_color="#c9d1d9", height=480, title_font_size=12,
-                                          margin=dict(r=20, t=40, b=20)) 
-                        
-                        # Force Plotly to automatically make room for the text labels
-                        fig.update_yaxes(automargin=True)
-                        fig.update_xaxes(rangemode="tozero")
-                        
-                        st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
-                    with col_fi:
-                        st.markdown("**Feature Importance (XGBoost)**")
-                        if os.path.exists("feature_importance.png"):
-                            # Data URI: the deployed Streamlit /media endpoint 500s on Render.
-                            with open("feature_importance.png", "rb") as _fi:
-                                _fi_b64 = base64.b64encode(_fi.read()).decode()
-                            st.markdown(
-                                f'<img src="data:image/png;base64,{_fi_b64}" width="400" '
-                                f'style="max-width:100%;height:auto" '
-                                f'alt="XGBoost feature importance chart">',
-                                unsafe_allow_html=True,
-                            )
-                            st.caption(
-                                "Chart generated offline by `trainmodel.py` (step 7) from the fitted "
-                                "XGBoost model. It is a static image, so it does not need the model "
-                                "to be retrained to display."
-                            )
-                        else:
-                            st.info(
-                                "ℹ️ **Optional artefact missing — not an error.** The forecast above is "
-                                "fully working; only the feature-importance chart is absent because "
-                                "`feature_importance.png` is not in the current working directory.\n\n"
-                                "To regenerate it: `py trainmodel.py` (trains XGBoost on "
-                                "`training_data (1).csv`, writes `model.pkl` and "
-                                "`feature_importance.png`). The deployed dashboard and the GitHub "
-                                "repo both include the PNG, so this notice only appears on a fresh "
-                                "local checkout without the training artefacts."
-                            )
+                    df_p["short_name"] = df_p["item_name"].apply(lambda x: x if len(str(x)) < 30 else str(x)[:27] + "...")
+                    fig = px.bar(df_p.sort_values("predicted_rate"),
+                        x="predicted_rate", y="short_name", orientation="h",
+                        color="hos_tier", color_discrete_map=HOS_COLOR,
+                        title=f"Predicted Consumption — Tempo:{tempo} T1:{t1} T2:{t2} T3:{t3}",
+                        labels={"predicted_rate":"Rate (u/hr)", "short_name":""},
+                        hover_data={"item_name": True})
+                    fig.update_layout(plot_bgcolor="#0d1117", paper_bgcolor="#161b22",
+                                      font_color="#c9d1d9", height=480, title_font_size=12,
+                                      margin=dict(r=20, t=40, b=20))
+                    fig.update_yaxes(automargin=True)
+                    fig.update_xaxes(rangemode="tozero")
+                    st.plotly_chart(fig, use_container_width=True, theme=None, config={'displayModeBar': False})
                     df_show = df_p[["item_id","item_name","current_stock",
                                     "predicted_rate","hours_of_supply","hos_tier"]]
                     df_show.columns = ["ID","Name","Stock","Rate (u/hr)","HoS (hrs)","Tier"]
