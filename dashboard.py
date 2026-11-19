@@ -1984,16 +1984,45 @@ def show_dashboard():
                       Avg HoS: {row["avg_hos"]}h · {row["items"]} item types<br>
                       <i>{row["source"]}</i></span>
                     </div>""", unsafe_allow_html=True)
-                st.markdown("**Resupply Pipeline** *(illustrative example — not a live feed)*")
-                for p in [
-                    {"from":"R3-CHARLIE","to":"R2-BRAVO","item":"IV Fluids x50","eta":"2h","status":"🚛 In Transit"},
-                    {"from":"R2-BRAVO","to":"R1-ALPHA","item":"Tourniquets x20","eta":"45min","status":"📦 Packed"},
-                ]:
+                st.markdown("**Resupply Pipeline** *(live — requests & reorder needs)*")
+                try:
+                    _rr = _api_request("get", "/resupply_requests?limit=20")
+                    reqs = _rr.json() if _rr is not None and _rr.status_code == 200 else []
+                except Exception:
+                    reqs = []
+                if not isinstance(reqs, list):
+                    reqs = []
+                esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                node_by_ech = {l["echelon"]: l["node"] for l in NODE_LAYOUT}
+                cards = []
+                for req in reqs:
+                    status = req.get("status", "PENDING")
+                    icon = {"PENDING": "📦 Awaiting approval",
+                            "APPROVED": "📥 Delivered",
+                            "REJECTED": "✖ Rejected"}.get(status, esc(status))
+                    dest = node_by_ech.get(req.get("echelon"), req.get("echelon", "?"))
+                    src = "Depot" if req.get("echelon") == "Role3" else "R3-CHARLIE"
+                    when = req.get("decided_at") or req.get("created_at", "")
+                    prio = 0 if status == "PENDING" else 2
+                    cards.append((prio, icon, f"{req.get('item_name', '?')} x{req.get('qty', '?')}",
+                                  f"{src} → {dest} · {when} · by {req.get('requested_by', '?')}"))
+                open_ids = {r.get("item_id") for r in reqs if r.get("status") == "PENDING"}
+                for r in hos_rows:
+                    if r.get("needs_reorder") and r.get("item_id") not in open_ids:
+                        dest = node_by_ech.get(r.get("echelon"), r.get("echelon", "?"))
+                        src = "Depot" if r.get("echelon") == "Role3" else "R3-CHARLIE"
+                        cards.append((1, "🚨 Reorder suggested",
+                                      f"{r.get('item_name', '?')} x{r.get('suggested_qty', '?')}",
+                                      f"{src} → {dest} · {r.get('hours_of_supply', 0)}h left ({r.get('hos_tier', '?')})"))
+                cards.sort(key=lambda c: c[0])
+                if not cards:
+                    st.info("No open resupply requests or reorder needs — pipeline clear.")
+                for _, icon, item, route in cards[:8]:
                     st.markdown(f"""
                     <div style='background:#161b22;border:1px solid #30363d;border-radius:6px;
                                 padding:8px 10px;margin-bottom:6px;font-size:11px'>
-                      {p["status"]} <b style='color:#c9d1d9'>{p["item"]}</b><br>
-                      <span style='color:#8b949e'>{p["from"]} → {p["to"]} · ETA: {p["eta"]}</span>
+                      {icon} <b style='color:#c9d1d9'>{esc(item)}</b><br>
+                      <span style='color:#8b949e'>{esc(route)}</span>
                     </div>""", unsafe_allow_html=True)
 
     # ── TAB 8: VALIDATION ─────────────────────────────────────────────────────

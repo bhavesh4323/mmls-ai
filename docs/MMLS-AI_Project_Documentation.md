@@ -446,14 +446,15 @@ Shows a geographic view of the supply chain — where the medical facilities are
 - One card per node, with a colored left border matching the tier
 - Shows the node's role, average HoS, and tier
 
-**Below: Resupply Pipeline**
-- Shows items currently in transit between nodes, e.g.:
-  - "🚛 In Transit IV Fluids x50 R3-CHARLIE → R2-BRAVO · ETA: 2h"
-  - "📦 Packed Tourniquets x20 R2-BRAVO → R1-ALPHA · ETA: 45min"
+**Below: Resupply Pipeline (live)**
+- **📦 Awaiting approval** — live `PENDING` entries from `GET /resupply_requests` (medic sent a reorder from the Hours of Supply tab), routed R3-CHARLIE → the requesting echelon (Depot → R3-CHARLIE for Role 3 items).
+- **🚨 Reorder suggested** — live items with `needs_reorder` from `/hours_of_supply` that have no pending request yet, with the policy's `suggested_qty` and current hours left.
+- **📥 Delivered / ✖ Rejected** — decided requests (`decided_at`, `decided_by`); approval credits the stock.
+- Pending requests sort first, then suggestions, then decided entries; capped at 8 cards. When nothing is open: "pipeline clear".
 
-**Note:** The map uses hardcoded coordinates and randomly generated HoS values. The values change each time you refresh the page. This tab is a visualization concept — it shows what the supply chain map would look like when connected to live data.
+**Note:** Node coordinates and personnel are declared `NODE_LAYOUT` constants (a notional theatre layout, replaceable with surveyed coordinates — see the tab's expander). Item counts, average HoS, tier, worst item and the whole Resupply Pipeline are computed live from `/hours_of_supply` and `/resupply_requests`.
 
-**Real-life scenario:** A logistician checks the map and sees R1-ALPHA in red (critical supply level). The resupply pipeline shows tourniquets are in transit from R2-BRAVO with a 45-minute ETA. They verify the resupply will arrive in time, but also check if they need to expedite additional supplies.
+**Real-life scenario:** A logistician checks the map and sees R1-ALPHA purple (an item at 0h). The live pipeline shows "🚨 Reorder suggested x48" for that item; once the medic sends the request it becomes "📦 Awaiting approval", and after Role 3 approves it shows "📥 Delivered" with the stock credited — the whole reorder loop visible on one screen.
 
 ---
 
