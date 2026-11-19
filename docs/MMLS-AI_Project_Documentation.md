@@ -355,30 +355,37 @@ After clicking **"🤖 Run XGBoost Forecast"**, you see two things:
 
 ### Purpose
 
-Shows a pre-trained **LSTM (Long Short-Term Memory) neural network** model that predicts consumption trends over 48 hours and highlights where a **MASCAL (Mass Casualty) surge** occurs. This helps you recognize when a sudden spike in demand is coming so you can pre-position supplies.
+Runs the trained **LSTM (Long Short-Term Memory) neural network** on the **live audit trail** to detect consumption trend spikes (MASCAL / mass-casualty surges) over the last 48 hours. New scans change the chart immediately — this tab is live, not a replay.
 
-### What You See (No Buttons — Auto-Loaded)
+### How It Works Live
 
-**1. Line Chart — "LSTM: 48-Hour Consumption Trend — CAT Tourniquet (MASCAL surge at H+24)"**
-- Blue solid line: **Actual** consumption over 48 hours
-- Red dashed line: **LSTM Predicted** consumption
-- A dotted vertical line at hour 24 labeled **"MASCAL Surge →"** — this is where the model detects a sudden spike in demand
-- **How to read it:** Before hour 24, consumption is steady and low. At hour 24, a mass-casualty event occurs and consumption spikes dramatically. The LSTM model's predicted line closely tracks the actual line, showing it can detect the surge.
+- **Actual (blue solid):** units used per hour for the selected item, bucketed from live `/audit_log` SCAN events (UTC, last 48 hours).
+- **LSTM Predicted (red dashed):** the trained Keras LSTM (32 units, 6-hour lookback), exported to `lstm_weights.npz` and run in **pure numpy** on that live series — no TensorFlow needed on the server. One-step-ahead: the previous 6 scaled hours predict the next hour.
+- **Inventory baseline (gray dotted):** the item's `avg_consumption_per_hour` from `/inventory`.
+- **Item selector:** defaults to the item with the most recorded SCAN events; any live inventory item can be chosen.
 
-**2. Three Metric Cards**
+### What You See
+
+**1. Line Chart — "Live 48-Hour Consumption — <item name> (<item id>)"** with the three traces above.
+
+**2. Four Metric Cards**
 
 | Card | What It Shows |
 |---|---|
-| **LSTM R²** | R-squared score — how well the LSTM predictions match the actual data (1.0 = perfect, 0.0 = no better than average) |
-| **LSTM MSE** | Mean Squared Error — average prediction error (lower is better) |
+| **Recorded uses (48h)** | Total units scanned for the selected item in the window |
+| **Peak hour (units)** | Largest single-hour usage |
+| **LSTM next-hour forecast** | The model's prediction for the upcoming hour, computed from the latest 6 live hours |
 | **Purpose** | "Surge Detection" |
 
-**3. Info Box**
-- "💡 LSTM tracks consumption trends over time. XGBoost predicts per-item demand. Together they provide complete AI coverage."
+**3. Validation Expander — "Offline validation — recorded MASCAL surge at H+24"**
 
-**If the data files are missing:** "⚠️ LSTM files not found. Make sure lstm_actual.npy, lstm_preds.npy, lstm_hours.npy are in the mmsai folder."
+Replays the same numpy LSTM on the recorded tourniquet surge (`lstm_actual.npy`, `lstm_preds.npy`, `lstm_hours.npy`): baseline 8.2 u/hr, 37.4 u/hr after H24, predictions catch up by H30 (~6 h lag). Metrics: **Validation R² 0.7896**, **Validation MSE 44.0040**, with the "MASCAL Surge →" marker at hour 24.
 
-**Real-life scenario:** A logistician is reviewing the LSTM chart and sees that the model successfully predicted a consumption spike at hour 24. This tells them that if a MASCAL event happens, they can expect tourniquet usage to triple within hours. They use this insight to pre-position extra tourniquets at Role 1 stations before an operation.
+**Model domain note:** the LSTM was trained on tourniquet-scale consumption (8–38 u/hr). On low-rate live items the forecast shows its learned baseline reacting to upward spikes; the accuracy benchmarks are the validation figures above.
+
+**If model artefacts are missing:** "⚠️ Model artefact missing: `lstm_weights.npz` / `lstm_scaler.pkl` — run Streamlit from the project root; both ship with the repo."
+
+**Real-life scenario:** A logistician scans a used pack (or the automated self-test runs). The spike appears in the blue live trace within the hour and the LSTM next-hour forecast rises — an early warning to pre-position extra stock at Role 1 stations before the surge fully develops.
 
 ---
 
@@ -843,11 +850,10 @@ The `/clinical_event` endpoint maps clinical events to the medical items they co
 **Situation:** During sustained operations, a mass-casualty event occurs at hour 24 of an operation. Multiple casualties arrive simultaneously.
 
 **What MMLS-AI shows:**
-1. Go to **📈 LSTM Trend** tab
-2. The chart shows consumption was steady at ~5 units/hour for the first 24 hours
-3. At hour 24, the "MASCAL Surge →" marker appears — actual consumption spikes to 25+ units/hour
-4. The LSTM predicted line (red dashed) closely tracks the actual spike, showing the model detected the surge
-5. The R² metric shows the model's prediction accuracy
+1. Go to **📈 LSTM Trend** tab — the live chart buckets the selected item's scans from the audit trail
+2. Run the **Validation → automated self-test** (or scan packs) to generate live usage; the blue "Actual" trace spikes within the hour
+3. The red dashed LSTM line and the "LSTM next-hour forecast" metric rise in response to the spike
+4. Open the **offline validation expander** to see the recorded MASCAL surge at H+24: actual jumps from ~8 to 37 u/hr and the LSTM catches up by H30 (Validation R² 0.7896)
 
 **Action taken:** The LSTM confirms the surge pattern. The logistician now knows to watch for this pattern in live data — if the Live Forecast's predicted rate suddenly exceeds 2× the baseline, a MASCAL event may be happening.
 
@@ -921,7 +927,7 @@ These are important to know so you don't rely on features that don't work as exp
 
 4. **Cross-Echelon Map uses random data.** The map tab generates random hours-of-supply values each time the page loads. It is not connected to live inventory data. Values will change on every refresh.
 
-5. **LSTM view is static.** The LSTM tab loads pre-computed `.npy` data files (actual values, predictions, timestamps). It does not run the LSTM model live — it displays a fixed example of a MASCAL surge detection. The `lstm_model.keras` file exists but is not loaded by the dashboard.
+5. **LSTM is trained on a single recorded surge.** The live tab runs the trained LSTM on the real audit trail, but the model was trained on tourniquet-scale consumption (8–38 u/hr). On low-rate items its forecast sits at the learned baseline and reacts to upward spikes; it is a surge-trend indicator, not a per-item demand predictor (that is XGBoost's role).
 
 6. **`/reset` and `/clinical_event` are not accessible from the dashboard.** These API endpoints exist but no button in the dashboard UI calls them. They are only reachable via direct API calls.
 
